@@ -1,0 +1,32 @@
+bind_port = 5678
+intercept_port = 0
+enable_log = false
+
+[pool]
+count = 10
+usage_db = "data/onegate.db"
+# admin_tokens = []  # Auto-generated on first startup if empty
+
+[providers.openai]
+prefix = "/oai"
+upstream = "https://api.openai.com"
+strip_prefix = true
+env_token = "TOKEN_OPENAI"
+
+[providers.anthropic]
+prefix = "/claude"
+upstream = "https://api.anthropic.com"
+strip_prefix = true
+env_token = "TOKEN_ANTHROPIC"
+
+[providers.grok]
+prefix = "/grok"
+upstream = "https://api.x.ai"
+strip_prefix = true
+env_token = "TOKEN_GROK"
+
+[providers.default]
+prefix = "/"
+upstream = "https://api.openai.com"
+strip_prefix = false
+env_token = "TOKEN_OPENAI"
