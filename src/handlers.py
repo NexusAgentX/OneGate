@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
-import ssl
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -14,6 +15,7 @@ from src.models import TokenEntry
 from src.pool import resolve_token
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+logger = logging.getLogger(__name__)
 
 
 def _parse_iso(s: str) -> datetime:
@@ -111,6 +113,7 @@ def create_handlers(
     token_pool: dict[str, TokenEntry],
     db_conn,
     public_ip: str | None,
+    session: aiohttp.ClientSession,
 ):
     async def serve_usage_page(request: web.Request) -> web.Response:
         html_path = os.path.join(STATIC_DIR, "usage.html")
@@ -188,11 +191,7 @@ def create_handlers(
 
         body = await request.read() if request.body_exists else None
 
-        connector = aiohttp.TCPConnector(ssl=ssl.create_default_context())
-        async with aiohttp.ClientSession(
-            connector=connector,
-            skip_auto_headers={"User-Agent"},
-        ) as session:
+        try:
             async with session.request(
                 method=request.method,
                 url=target_url,
@@ -203,15 +202,16 @@ def create_handlers(
                 resp_headers = dict(resp.headers)
                 resp_headers.pop("Transfer-Encoding", None)
 
-                resp_chunks = []
                 response = web.StreamResponse(
                     status=resp.status,
                     headers=resp_headers,
                 )
                 await response.prepare(request)
 
+                resp_chunks = []
                 async for chunk in resp.content.iter_any():
-                    resp_chunks.append(chunk)
+                    if cfg.enable_log:
+                        resp_chunks.append(chunk)
                     await response.write(chunk)
 
                 await response.write_eof()
@@ -231,11 +231,40 @@ def create_handlers(
                     )
                 if proxy_token:
                     record_usage(db_conn, proxy_token, provider.name)
-                print(
-                    f"[LOG] {request.method} {request.path} "
-                    f"-> [{provider.name}] {resp.status}"
+                logger.info(
+                    "%s %s -> [%s] %s",
+                    request.method,
+                    request.path,
+                    provider.name,
+                    resp.status,
                 )
 
                 return response
+
+        except asyncio.TimeoutError:
+            logger.error(
+                "Timeout proxying %s %s -> [%s] %s",
+                request.method,
+                request.path,
+                provider.name,
+                target_url,
+            )
+            return web.json_response(
+                {"error": "upstream request timed out"},
+                status=504,
+            )
+        except aiohttp.ClientError as e:
+            logger.error(
+                "Client error proxying %s %s -> [%s] %s: %s",
+                request.method,
+                request.path,
+                provider.name,
+                target_url,
+                e,
+            )
+            return web.json_response(
+                {"error": f"upstream connection error: {e}"},
+                status=502,
+            )
 
     return serve_usage_page, info_api_handler, proxy_handler

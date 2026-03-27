@@ -2,6 +2,11 @@ bind_port = 5678
 intercept_port = 0
 enable_log = false
 
+[timeout]
+total = 1800
+connect = 30
+sock_read = 900
+
 [pool]
 count = 10
 usage_db = "data/onegate.db"

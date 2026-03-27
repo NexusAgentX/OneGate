@@ -21,6 +21,9 @@ class AppConfig:
     admin_tokens: list[str] = field(default_factory=list)
     providers: list[Provider] = field(default_factory=list)
     real_tokens: dict[str, str] = field(default_factory=dict)
+    timeout_total: int = 1800
+    timeout_connect: int = 30
+    timeout_sock_read: int = 900
 
 
 def load_config(config_dir: str | None = None) -> AppConfig:
@@ -36,6 +39,9 @@ def load_config(config_dir: str | None = None) -> AppConfig:
         cfg.pool_count = int(env_pool_count) if env_pool_count else 5
         cfg.pool_file = os.environ.get("POOL_FILE", "pool.json")
         cfg.usage_db = os.environ.get("USAGE_DB", "data/onegate.db")
+        cfg.timeout_total = int(os.environ.get("TIMEOUT_TOTAL", "1800"))
+        cfg.timeout_connect = int(os.environ.get("TIMEOUT_CONNECT", "30"))
+        cfg.timeout_sock_read = int(os.environ.get("TIMEOUT_SOCK_READ", "900"))
         real = os.environ.get("REAL_TOKEN", "")
         if real:
             cfg.real_tokens["default"] = real
@@ -47,6 +53,18 @@ def load_config(config_dir: str | None = None) -> AppConfig:
     cfg.bind_port = data.get("bind_port", 5678)
     cfg.intercept_port = data.get("intercept_port", 0)
     cfg.enable_log = data.get("enable_log", False)
+
+    timeout_cfg = data.get("timeout", {})
+    env_total = os.environ.get("TIMEOUT_TOTAL")
+    env_connect = os.environ.get("TIMEOUT_CONNECT")
+    env_sock_read = os.environ.get("TIMEOUT_SOCK_READ")
+    cfg.timeout_total = int(env_total) if env_total else timeout_cfg.get("total", 1800)
+    cfg.timeout_connect = (
+        int(env_connect) if env_connect else timeout_cfg.get("connect", 30)
+    )
+    cfg.timeout_sock_read = (
+        int(env_sock_read) if env_sock_read else timeout_cfg.get("sock_read", 900)
+    )
 
     pool_cfg = data.get("pool", {})
     env_pool_count = os.environ.get("POOL_COUNT")

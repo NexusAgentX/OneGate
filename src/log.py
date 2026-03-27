@@ -12,6 +12,18 @@ def _ensure_log_dir():
     os.makedirs(LOG_DIR, exist_ok=True)
 
 
+def _try_parse_json_body(headers, body: bytes | None) -> bytes | dict | list | None:
+    if not body:
+        return None
+    content_type = headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        try:
+            return json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return body.decode("utf-8", errors="replace")
+
+
 def save_log(
     request_method: str,
     request_path: str,
@@ -31,17 +43,17 @@ def save_log(
             "method": request_method,
             "path": request_path,
             "headers": dict(req_headers),
-            "body": req_body.decode("utf-8", errors="replace") if req_body else None,
+            "body": _try_parse_json_body(req_headers, req_body),
         },
         "forward": {
             "url": target_url,
             "headers": dict(forward_headers),
-            "body": req_body.decode("utf-8", errors="replace") if req_body else None,
+            "body": _try_parse_json_body(forward_headers, req_body),
         },
         "response": {
             "status": resp_status,
             "headers": dict(resp_headers),
-            "body": resp_body.decode("utf-8", errors="replace") if resp_body else None,
+            "body": _try_parse_json_body(resp_headers, resp_body),
         },
     }
     log_file = os.path.join(LOG_DIR, f"{now}.json")

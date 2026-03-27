@@ -1,5 +1,8 @@
 import asyncio
+import logging
+import ssl
 
+import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 
@@ -11,6 +14,7 @@ from src.network import fetch_public_ip
 from src.pool import load_pool_from_db
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 
 
 async def main():
@@ -33,8 +37,23 @@ async def main():
     provider_names = [p.name for p in cfg.providers]
     print(f"Providers configured: {provider_names}")
 
+    timeout = aiohttp.ClientTimeout(
+        total=cfg.timeout_total,
+        sock_connect=cfg.timeout_connect,
+        sock_read=cfg.timeout_sock_read,
+    )
+    connector = aiohttp.TCPConnector(ssl=ssl.create_default_context())
+    session = aiohttp.ClientSession(
+        connector=connector,
+        timeout=timeout,
+        skip_auto_headers={"User-Agent"},
+    )
+
+    async def on_cleanup(app: web.Application):
+        await session.close()
+
     serve_usage_page, info_api_handler, proxy_handler = create_handlers(
-        cfg, token_pool, db_conn, public_ip
+        cfg, token_pool, db_conn, public_ip, session
     )
 
     (
@@ -45,7 +64,8 @@ async def main():
         api_delete_token,
     ) = create_admin_handlers(cfg, db_conn, token_pool)
 
-    app = web.Application()
+    app = web.Application(handler_args={"keepalive_timeout": 75})
+    app.on_cleanup.append(on_cleanup)
     app.router.add_get("/usage", serve_usage_page)
     app.router.add_post("/usage/api", info_api_handler)
     app.router.add_get("/admin", serve_admin_page)
@@ -68,6 +88,9 @@ async def main():
     print(f"Admin panel: http://0.0.0.0:{cfg.bind_port}/admin")
     print(f"Intercept: {cfg.intercept_port or 'disabled'}")
     print(f"Logging: {'enabled' if cfg.enable_log else 'disabled'}")
+    print(
+        f"Timeouts: total={cfg.timeout_total}s, connect={cfg.timeout_connect}s, sock_read={cfg.timeout_sock_read}s"
+    )
     await asyncio.Event().wait()
 
 

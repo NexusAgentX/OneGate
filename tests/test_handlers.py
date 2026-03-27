@@ -4,8 +4,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import os
+import ssl
 import tempfile
 
+import aiohttp
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase
 
@@ -63,8 +65,16 @@ class TestHandlers(AioHTTPTestCase):
         }
         self.public_ip = "1.2.3.4"
 
+        timeout = aiohttp.ClientTimeout(total=30, sock_connect=5, sock_read=10)
+        connector = aiohttp.TCPConnector(ssl=ssl.create_default_context())
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            skip_auto_headers={"User-Agent"},
+        )
+
         serve_usage_page, info_api_handler, proxy_handler = create_handlers(
-            self.cfg, self.token_pool, self.db_conn, self.public_ip
+            self.cfg, self.token_pool, self.db_conn, self.public_ip, self.session
         )
 
         (
@@ -85,6 +95,9 @@ class TestHandlers(AioHTTPTestCase):
         app.router.add_delete("/admin/api/tokens", api_delete_token)
         app.router.add_route("*", "/{path:.*}", proxy_handler)
         return app
+
+    async def asyncTearDown(self):
+        await self.session.close()
 
     async def test_info_api_missing_token(self):
         resp = await self.client.post("/usage/api", json={})
@@ -164,8 +177,16 @@ class TestAdminAPI(AioHTTPTestCase):
         }
         self.public_ip = "1.2.3.4"
 
+        timeout = aiohttp.ClientTimeout(total=30, sock_connect=5, sock_read=10)
+        connector = aiohttp.TCPConnector(ssl=ssl.create_default_context())
+        self.session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=timeout,
+            skip_auto_headers={"User-Agent"},
+        )
+
         serve_usage_page, info_api_handler, proxy_handler = create_handlers(
-            self.cfg, self.token_pool, self.db_conn, self.public_ip
+            self.cfg, self.token_pool, self.db_conn, self.public_ip, self.session
         )
         (
             serve_admin_page,
@@ -187,6 +208,7 @@ class TestAdminAPI(AioHTTPTestCase):
         return app
 
     async def asyncTearDown(self):
+        await self.session.close()
         self.db_conn.close()
         if os.path.exists(self.db_file):
             os.unlink(self.db_file)
