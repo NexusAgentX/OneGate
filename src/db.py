@@ -14,6 +14,11 @@ def _get_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {row[1] for row in cur.fetchall()}
 
 
+def _get_primary_key_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    cur = conn.execute(f"PRAGMA table_info({table})")
+    return {row[1] for row in cur.fetchall() if row[5] > 0}
+
+
 def _migrate_old_schema(conn: sqlite3.Connection):
     cols = _get_columns(conn, "request_log")
     if "provider" not in cols:
@@ -26,6 +31,29 @@ def _migrate_old_schema(conn: sqlite3.Connection):
                 "UPDATE request_log SET provider = 'default' WHERE provider = '' OR provider IS NULL"
             )
         conn.commit()
+
+    pk_cols = _get_primary_key_columns(conn, "request_log")
+    if pk_cols == {"token", "ts"}:
+        print(
+            "[DB] Migrating: rebuilding request_log with PRIMARY KEY (token, provider, ts)"
+        )
+        conn.execute(
+            "CREATE TABLE request_log_new ("
+            "  token TEXT NOT NULL,"
+            "  provider TEXT NOT NULL DEFAULT 'default',"
+            "  ts INTEGER NOT NULL,"
+            "  count INTEGER NOT NULL DEFAULT 1,"
+            "  PRIMARY KEY (token, provider, ts)"
+            ")"
+        )
+        conn.execute(
+            "INSERT INTO request_log_new (token, provider, ts, count) "
+            "SELECT token, provider, ts, count FROM request_log"
+        )
+        conn.execute("DROP TABLE request_log")
+        conn.execute("ALTER TABLE request_log_new RENAME TO request_log")
+        conn.commit()
+        print("[DB] Migration complete: request_log primary key updated")
 
 
 def _migrate_pool_json(
