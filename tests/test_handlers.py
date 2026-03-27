@@ -63,7 +63,7 @@ class TestHandlers(AioHTTPTestCase):
         }
         self.public_ip = "1.2.3.4"
 
-        info_handler, proxy_handler = create_handlers(
+        serve_usage_page, info_api_handler, proxy_handler = create_handlers(
             self.cfg, self.token_pool, self.db_conn, self.public_ip
         )
 
@@ -76,25 +76,34 @@ class TestHandlers(AioHTTPTestCase):
         ) = create_admin_handlers(self.cfg, self.db_conn, self.token_pool)
 
         app = web.Application()
+        app.router.add_get("/usage", serve_usage_page)
+        app.router.add_post("/usage/api", info_api_handler)
         app.router.add_get("/admin", serve_admin_page)
         app.router.add_get("/admin/api/tokens", api_list_tokens)
         app.router.add_post("/admin/api/tokens", api_create_token)
-        app.router.add_put("/admin/api/tokens/{token}", api_update_token)
-        app.router.add_delete("/admin/api/tokens/{token}", api_delete_token)
-        app.router.add_get("/proxy-service-info", info_handler)
+        app.router.add_put("/admin/api/tokens", api_update_token)
+        app.router.add_delete("/admin/api/tokens", api_delete_token)
         app.router.add_route("*", "/{path:.*}", proxy_handler)
         return app
 
-    async def test_info_missing_token(self):
-        resp = await self.client.get("/proxy-service-info")
+    async def test_info_api_missing_token(self):
+        resp = await self.client.post("/usage/api", json={})
         assert resp.status == 400
 
-    async def test_info_unknown_token(self):
-        resp = await self.client.get("/proxy-service-info?token=unknown")
+    async def test_info_api_invalid_json(self):
+        resp = await self.client.post(
+            "/usage/api",
+            data="not json",
+            headers={"Content-Type": "text/plain"},
+        )
+        assert resp.status == 400
+
+    async def test_info_api_unknown_token(self):
+        resp = await self.client.post("/usage/api", json={"token": "unknown"})
         assert resp.status == 404
 
-    async def test_info_known_token(self):
-        resp = await self.client.get(f"/proxy-service-info?token={_make_token_full()}")
+    async def test_info_api_known_token(self):
+        resp = await self.client.post("/usage/api", json={"token": _make_token_full()})
         assert resp.status == 200
         data = await resp.json()
         assert data["token"] == _make_token_full()
@@ -155,7 +164,7 @@ class TestAdminAPI(AioHTTPTestCase):
         }
         self.public_ip = "1.2.3.4"
 
-        info_handler, proxy_handler = create_handlers(
+        serve_usage_page, info_api_handler, proxy_handler = create_handlers(
             self.cfg, self.token_pool, self.db_conn, self.public_ip
         )
         (
@@ -167,12 +176,13 @@ class TestAdminAPI(AioHTTPTestCase):
         ) = create_admin_handlers(self.cfg, self.db_conn, self.token_pool)
 
         app = web.Application()
+        app.router.add_get("/usage", serve_usage_page)
+        app.router.add_post("/usage/api", info_api_handler)
         app.router.add_get("/admin", serve_admin_page)
         app.router.add_get("/admin/api/tokens", api_list_tokens)
         app.router.add_post("/admin/api/tokens", api_create_token)
-        app.router.add_put("/admin/api/tokens/{token}", api_update_token)
-        app.router.add_delete("/admin/api/tokens/{token}", api_delete_token)
-        app.router.add_get("/proxy-service-info", info_handler)
+        app.router.add_put("/admin/api/tokens", api_update_token)
+        app.router.add_delete("/admin/api/tokens", api_delete_token)
         app.router.add_route("*", "/{path:.*}", proxy_handler)
         return app
 
@@ -181,12 +191,25 @@ class TestAdminAPI(AioHTTPTestCase):
         if os.path.exists(self.db_file):
             os.unlink(self.db_file)
 
+    def _admin_headers(self):
+        return {"X-Admin-Token": self.admin_token}
+
     async def test_admin_unauthorized(self):
-        resp = await self.client.get("/admin/api/tokens?token=bad")
+        resp = await self.client.get(
+            "/admin/api/tokens", headers={"X-Admin-Token": "bad"}
+        )
         assert resp.status == 403
 
+    async def test_admin_unauthorized_no_header(self):
+        resp = await self.client.get("/admin/api/tokens")
+        assert resp.status == 403
+
+    async def test_admin_page_no_auth(self):
+        resp = await self.client.get("/admin")
+        assert resp.status == 200
+
     async def test_admin_list_tokens(self):
-        resp = await self.client.get(f"/admin/api/tokens?token={self.admin_token}")
+        resp = await self.client.get("/admin/api/tokens", headers=self._admin_headers())
         assert resp.status == 200
         data = await resp.json()
         assert len(data["tokens"]) >= 1
@@ -195,7 +218,8 @@ class TestAdminAPI(AioHTTPTestCase):
 
     async def test_admin_create_token(self):
         resp = await self.client.post(
-            f"/admin/api/tokens?token={self.admin_token}",
+            "/admin/api/tokens",
+            headers=self._admin_headers(),
             json={"providers": ["glm"], "is_admin": False},
         )
         assert resp.status == 200
@@ -207,14 +231,16 @@ class TestAdminAPI(AioHTTPTestCase):
 
     async def test_admin_update_token(self):
         create_resp = await self.client.post(
-            f"/admin/api/tokens?token={self.admin_token}",
+            "/admin/api/tokens",
+            headers=self._admin_headers(),
             json={"providers": ["glm"]},
         )
         new_token = (await create_resp.json())["token"]["token"]
 
         resp = await self.client.put(
-            f"/admin/api/tokens/{new_token}?token={self.admin_token}",
-            json={"providers": ["oai", "glm"], "is_admin": True},
+            "/admin/api/tokens",
+            headers=self._admin_headers(),
+            json={"token": new_token, "providers": ["oai", "glm"], "is_admin": True},
         )
         assert resp.status == 200
         data = await resp.json()
@@ -223,34 +249,35 @@ class TestAdminAPI(AioHTTPTestCase):
 
     async def test_admin_toggle_enabled(self):
         create_resp = await self.client.post(
-            f"/admin/api/tokens?token={self.admin_token}",
+            "/admin/api/tokens",
+            headers=self._admin_headers(),
             json={"providers": ["*"]},
         )
         new_token = (await create_resp.json())["token"]["token"]
 
         resp = await self.client.put(
-            f"/admin/api/tokens/{new_token}?token={self.admin_token}",
-            json={"enabled": False},
+            "/admin/api/tokens",
+            headers=self._admin_headers(),
+            json={"token": new_token, "enabled": False},
         )
         assert resp.status == 200
         assert (await resp.json())["token"]["enabled"] is False
 
     async def test_admin_delete_token(self):
         create_resp = await self.client.post(
-            f"/admin/api/tokens?token={self.admin_token}",
+            "/admin/api/tokens",
+            headers=self._admin_headers(),
             json={"providers": ["*"]},
         )
         new_token = (await create_resp.json())["token"]["token"]
 
         resp = await self.client.delete(
-            f"/admin/api/tokens/{new_token}?token={self.admin_token}"
+            "/admin/api/tokens",
+            headers=self._admin_headers(),
+            json={"token": new_token},
         )
         assert resp.status == 200
         assert (await resp.json())["ok"] is True
-
-    async def test_admin_page_unauthorized(self):
-        resp = await self.client.get("/admin?token=bad")
-        assert resp.status == 403
 
 
 if __name__ == "__main__":

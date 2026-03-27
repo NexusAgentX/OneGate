@@ -18,9 +18,8 @@ from src.pool import make_token
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 
 
-def _check_admin(request: web.Request) -> bool:
-    token = request.query.get("token") or request.headers.get("X-Admin-Token", "")
-    return token != ""
+def _get_admin_token(request: web.Request) -> str:
+    return request.headers.get("X-Admin-Token", "")
 
 
 def create_admin_handlers(
@@ -29,10 +28,6 @@ def create_admin_handlers(
     token_pool: dict[str, TokenEntry],
 ):
     async def serve_admin_page(request: web.Request) -> web.Response:
-        admin_token = request.query.get("token", "")
-        if not admin_token or not is_admin_token(db_conn, admin_token):
-            return web.json_response({"error": "unauthorized"}, status=403)
-
         html_path = os.path.join(STATIC_DIR, "admin.html")
         if not os.path.exists(html_path):
             return web.json_response({"error": "admin.html not found"}, status=500)
@@ -41,13 +36,10 @@ def create_admin_handlers(
         with open(html_path, "r", encoding="utf-8") as f:
             html = f.read()
         html = html.replace("/*__PROVIDERS__*/", repr(providers))
-        html = html.replace("/*__ADMIN_TOKEN__*/", repr(admin_token))
         return web.Response(text=html, content_type="text/html")
 
     async def api_list_tokens(request: web.Request) -> web.Response:
-        admin_token = request.query.get("token") or request.headers.get(
-            "X-Admin-Token", ""
-        )
+        admin_token = _get_admin_token(request)
         if not admin_token or not is_admin_token(db_conn, admin_token):
             return web.json_response({"error": "unauthorized"}, status=403)
 
@@ -55,9 +47,7 @@ def create_admin_handlers(
         return web.json_response({"tokens": [t.to_dict() for t in tokens]})
 
     async def api_create_token(request: web.Request) -> web.Response:
-        admin_token = request.query.get("token") or request.headers.get(
-            "X-Admin-Token", ""
-        )
+        admin_token = _get_admin_token(request)
         if not admin_token or not is_admin_token(db_conn, admin_token):
             return web.json_response({"error": "unauthorized"}, status=403)
 
@@ -76,33 +66,28 @@ def create_admin_handlers(
         return web.json_response({"token": entry.to_dict()})
 
     async def api_update_token(request: web.Request) -> web.Response:
-        admin_token = request.query.get("token") or request.headers.get(
-            "X-Admin-Token", ""
-        )
+        admin_token = _get_admin_token(request)
         if not admin_token or not is_admin_token(db_conn, admin_token):
             return web.json_response({"error": "unauthorized"}, status=403)
-
-        target = request.match_info.get("token", "")
-        if not target:
-            return web.json_response({"error": "missing token"}, status=400)
 
         try:
             body = await request.json()
         except Exception:
             return web.json_response({"error": "invalid JSON"}, status=400)
 
+        target = body.get("token", "")
+        if not target:
+            return web.json_response({"error": "missing token"}, status=400)
+
         providers = body.get("providers")
         is_admin = body.get("is_admin")
         enabled = body.get("enabled")
 
-        auth_token = request.query.get("token") or request.headers.get(
-            "X-Admin-Token", ""
-        )
-        if is_admin is False and target == auth_token:
+        if is_admin is False and target == admin_token:
             return web.json_response(
                 {"error": "cannot remove your own admin privilege"}, status=400
             )
-        if enabled is False and target == auth_token:
+        if enabled is False and target == admin_token:
             return web.json_response(
                 {"error": "cannot disable your own token"}, status=400
             )
@@ -117,13 +102,16 @@ def create_admin_handlers(
         return web.json_response({"token": entry.to_dict()})
 
     async def api_delete_token(request: web.Request) -> web.Response:
-        admin_token = request.query.get("token") or request.headers.get(
-            "X-Admin-Token", ""
-        )
+        admin_token = _get_admin_token(request)
         if not admin_token or not is_admin_token(db_conn, admin_token):
             return web.json_response({"error": "unauthorized"}, status=403)
 
-        target = request.match_info.get("token", "")
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON"}, status=400)
+
+        target = body.get("token", "")
         if not target:
             return web.json_response({"error": "missing token"}, status=400)
 

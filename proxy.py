@@ -28,14 +28,14 @@ async def main():
     if generated_admins:
         for t in generated_admins:
             print(f"[ADMIN] Auto-generated admin token: {t}")
-            print(
-                f"[ADMIN] Use this to access: http://0.0.0.0:{cfg.bind_port}/admin?token={t}"
-            )
+            print(f"[ADMIN] Use this to access: http://0.0.0.0:{cfg.bind_port}/admin")
 
     provider_names = [p.name for p in cfg.providers]
     print(f"Providers configured: {provider_names}")
 
-    info_handler, proxy_handler = create_handlers(cfg, token_pool, db_conn, public_ip)
+    serve_usage_page, info_api_handler, proxy_handler = create_handlers(
+        cfg, token_pool, db_conn, public_ip
+    )
 
     (
         serve_admin_page,
@@ -46,12 +46,13 @@ async def main():
     ) = create_admin_handlers(cfg, db_conn, token_pool)
 
     app = web.Application()
+    app.router.add_get("/usage", serve_usage_page)
+    app.router.add_post("/usage/api", info_api_handler)
     app.router.add_get("/admin", serve_admin_page)
     app.router.add_get("/admin/api/tokens", api_list_tokens)
     app.router.add_post("/admin/api/tokens", api_create_token)
-    app.router.add_put("/admin/api/tokens/{token}", api_update_token)
-    app.router.add_delete("/admin/api/tokens/{token}", api_delete_token)
-    app.router.add_get("/proxy-service-info", info_handler)
+    app.router.add_put("/admin/api/tokens", api_update_token)
+    app.router.add_delete("/admin/api/tokens", api_delete_token)
     app.router.add_route("*", "/{path:.*}", proxy_handler)
 
     runner = web.AppRunner(app)
@@ -63,7 +64,8 @@ async def main():
     print(f"Reverse proxy running on http://0.0.0.0:{cfg.bind_port}")
     print(f"Providers: {provider_list}")
     print(f"Token pool: {len(token_pool)} tokens")
-    print(f"Admin panel: http://0.0.0.0:{cfg.bind_port}/admin?token=<admin_token>")
+    print(f"Usage query: http://0.0.0.0:{cfg.bind_port}/usage")
+    print(f"Admin panel: http://0.0.0.0:{cfg.bind_port}/admin")
     print(f"Intercept: {cfg.intercept_port or 'disabled'}")
     print(f"Logging: {'enabled' if cfg.enable_log else 'disabled'}")
     await asyncio.Event().wait()

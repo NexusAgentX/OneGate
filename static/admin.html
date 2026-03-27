@@ -416,81 +416,159 @@
       background: #238636;
       border: 1px solid #2ea043
     }
+
+    .login-overlay {
+      display: flex;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: #0d1117;
+      z-index: 400;
+      justify-content: center;
+      align-items: center
+    }
+
+    .login-overlay.hidden {
+      display: none
+    }
+
+    .login-box {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      padding: 32px;
+      width: 400px;
+      max-width: 90vw
+    }
+
+    .login-box h2 {
+      font-size: 20px;
+      color: #58a6ff;
+      margin-bottom: 20px
+    }
+
+    .login-box .form-group {
+      margin-bottom: 16px
+    }
+
+    .login-box .form-group label {
+      margin-bottom: 8px
+    }
+
+    .login-box .form-group input {
+      padding: 10px 12px;
+      font-size: 14px
+    }
+
+    .login-box .error-msg {
+      color: #f85149;
+      font-size: 12px;
+      min-height: 18px;
+      margin-top: 8px
+    }
+
+    .admin-content {
+      display: none
+    }
+
+    .admin-content.active {
+      display: block
+    }
   </style>
 </head>
 
 <body>
   <div class="toast-container" id="toast-container"></div>
-  <div class="header">
-    <h1>Token Management</h1>
-    <div class="info" id="stats"></div>
-  </div>
-  <div class="container">
-    <div class="toolbar">
-      <h2 id="token-count"></h2>
-      <div style="display:flex;gap:8px">
-        <button class="btn" onclick="loadTokens()">Refresh</button>
-        <button class="btn btn-primary" onclick="showCreateModal()">+ New Token</button>
-      </div>
-    </div>
-    <table>
-      <thead>
-        <tr>
-          <th>Token</th>
-          <th>Providers</th>
-          <th>Admin</th>
-          <th>Enabled</th>
-          <th>Created</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="token-tbody"></tbody>
-    </table>
-  </div>
 
-  <div class="modal-overlay" id="modal-overlay">
-    <div class="modal">
-      <h3 id="modal-title">New Token</h3>
+  <div class="login-overlay" id="login-overlay">
+    <div class="login-box">
+      <h2>Admin Login</h2>
       <div class="form-group">
-        <label>Token (leave empty to auto-generate)</label>
-        <input type="text" id="modal-token" placeholder="auto-generated">
+        <label>Admin Token</label>
+        <input type="text" id="login-token" placeholder="enter admin token..." autofocus>
       </div>
-      <div class="form-group">
-        <label>Providers</label>
-        <div class="checkbox-group" id="modal-providers"></div>
-      </div>
-      <div class="form-group" style="display:flex;align-items:center;gap:10px">
-        <label style="margin:0;text-transform:none;font-size:13px;color:#c9d1d9">Admin</label>
-        <label class="toggle">
-          <input type="checkbox" id="modal-admin">
-          <span class="slider"></span>
-        </label>
-      </div>
-      <div class="modal-actions">
-        <button class="btn" onclick="hideModal()">Cancel</button>
-        <button class="btn btn-primary" id="modal-submit" onclick="submitModal()">Create</button>
-      </div>
+      <button class="btn btn-primary" style="width:100%;padding:10px" onclick="doLogin()">Login</button>
+      <div class="error-msg" id="login-error"></div>
     </div>
   </div>
 
-  <div class="confirm-overlay" id="confirm-overlay">
-    <div class="confirm-box">
-      <p id="confirm-message"></p>
-      <div class="confirm-actions">
-        <button class="btn" onclick="confirmCancel()">Cancel</button>
-        <button class="btn btn-danger" id="confirm-ok" onclick="confirmOk()">Delete</button>
+  <div class="admin-content" id="admin-content">
+    <div class="header">
+      <h1>Token Management</h1>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="info" id="stats"></div>
+        <button class="btn btn-sm" onclick="doLogout()">Logout</button>
+      </div>
+    </div>
+    <div class="container">
+      <div class="toolbar">
+        <h2 id="token-count"></h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn" onclick="loadTokens()">Refresh</button>
+          <button class="btn btn-primary" onclick="showCreateModal()">+ New Token</button>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Token</th>
+            <th>Providers</th>
+            <th>Admin</th>
+            <th>Enabled</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="token-tbody"></tbody>
+      </table>
+    </div>
+
+    <div class="modal-overlay" id="modal-overlay">
+      <div class="modal">
+        <h3 id="modal-title">New Token</h3>
+        <div class="form-group">
+          <label>Token (leave empty to auto-generate)</label>
+          <input type="text" id="modal-token" placeholder="auto-generated">
+        </div>
+        <div class="form-group">
+          <label>Providers</label>
+          <div class="checkbox-group" id="modal-providers"></div>
+        </div>
+        <div class="form-group" style="display:flex;align-items:center;gap:10px">
+          <label style="margin:0;text-transform:none;font-size:13px;color:#c9d1d9">Admin</label>
+          <label class="toggle">
+            <input type="checkbox" id="modal-admin">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" onclick="hideModal()">Cancel</button>
+          <button class="btn btn-primary" id="modal-submit" onclick="submitModal()">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="confirm-overlay" id="confirm-overlay">
+      <div class="confirm-box">
+        <p id="confirm-message"></p>
+        <div class="confirm-actions">
+          <button class="btn" onclick="confirmCancel()">Cancel</button>
+          <button class="btn btn-danger" id="confirm-ok" onclick="confirmOk()">Delete</button>
+        </div>
       </div>
     </div>
   </div>
 
   <script>
-    const ADMIN_TOKEN = /*__ADMIN_TOKEN__*/;
     const PROVIDERS = /*__PROVIDERS__*/;
     const API_BASE = '';
+    let adminToken = null;
     let editingToken = null;
 
     function apiHeaders() {
-      return { 'Content-Type': 'application/json', 'X-Admin-Token': ADMIN_TOKEN };
+      return { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken };
     }
 
     async function api(method, path, body) {
@@ -580,7 +658,7 @@
     }
 
     async function loadTokens() {
-      const { ok, data } = await api('GET', '/admin/api/tokens?token=' + encodeURIComponent(ADMIN_TOKEN));
+      const { ok, data } = await api('GET', '/admin/api/tokens');
       if (!ok) {
         toast(data.error || 'Failed to load tokens');
         return;
@@ -624,7 +702,7 @@
     }
 
     async function showEditModal(token) {
-      const { ok, data } = await api('GET', '/admin/api/tokens?token=' + encodeURIComponent(ADMIN_TOKEN));
+      const { ok, data } = await api('GET', '/admin/api/tokens');
       if (!ok) {
         toast(data.error || 'Failed to load tokens');
         return;
@@ -651,13 +729,14 @@
       let result;
       if (!editingToken) {
         const customToken = document.getElementById('modal-token').value.trim();
-        result = await api('POST', '/admin/api/tokens?token=' + encodeURIComponent(ADMIN_TOKEN), {
+        result = await api('POST', '/admin/api/tokens', {
           token: customToken || undefined,
           providers: provs,
           is_admin: isAdmin,
         });
       } else {
-        result = await api('PUT', '/admin/api/tokens/' + encodeURIComponent(editingToken) + '?token=' + encodeURIComponent(ADMIN_TOKEN), {
+        result = await api('PUT', '/admin/api/tokens', {
+          token: editingToken,
           providers: provs,
           is_admin: isAdmin,
         });
@@ -673,7 +752,8 @@
 
     async function toggleEnabled(checkbox, token) {
       const newVal = checkbox.checked;
-      const result = await api('PUT', '/admin/api/tokens/' + encodeURIComponent(token) + '?token=' + encodeURIComponent(ADMIN_TOKEN), {
+      const result = await api('PUT', '/admin/api/tokens', {
+        token: token,
         enabled: newVal,
       });
       if (!result.ok) {
@@ -710,7 +790,7 @@
     }
 
     async function deleteToken(token) {
-      const result = await api('DELETE', '/admin/api/tokens/' + encodeURIComponent(token) + '?token=' + encodeURIComponent(ADMIN_TOKEN));
+      const result = await api('DELETE', '/admin/api/tokens', { token });
       if (!result.ok) {
         toast(result.data.error || 'Failed to delete');
         return;
@@ -723,7 +803,44 @@
       if (e.target === this) hideModal();
     });
 
-    loadTokens();
+    async function doLogin() {
+      const token = document.getElementById('login-token').value.trim();
+      if (!token) {
+        document.getElementById('login-error').textContent = 'Please enter a token';
+        return;
+      }
+      document.getElementById('login-error').textContent = '';
+      try {
+        const resp = await fetch('/admin/api/tokens', {
+          headers: { 'X-Admin-Token': token },
+        });
+        if (resp.status === 403) {
+          document.getElementById('login-error').textContent = 'Invalid admin token';
+          return;
+        }
+        if (!resp.ok) {
+          document.getElementById('login-error').textContent = 'Login failed';
+          return;
+        }
+        adminToken = token;
+        document.getElementById('login-overlay').classList.add('hidden');
+        document.getElementById('admin-content').classList.add('active');
+        loadTokens();
+      } catch (e) {
+        document.getElementById('login-error').textContent = 'Network error';
+      }
+    }
+
+    function doLogout() {
+      adminToken = null;
+      document.getElementById('login-token').value = '';
+      document.getElementById('login-overlay').classList.remove('hidden');
+      document.getElementById('admin-content').classList.remove('active');
+    }
+
+    document.getElementById('login-token').addEventListener('keydown', e => {
+      if (e.key === 'Enter') doLogin();
+    });
   </script>
 </body>
 
