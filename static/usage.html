@@ -206,6 +206,12 @@
       gap: 8px
     }
 
+    .bar-cell span {
+      display: inline-block;
+      text-align: right;
+      font-variant-numeric: tabular-nums
+    }
+
     .bar {
       height: 16px;
       background: #238636;
@@ -289,7 +295,13 @@
       </div>
 
       <div class="card">
-        <h3>Hourly Breakdown</h3>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+          <h3 style="margin:0">Hourly Breakdown</h3>
+          <div style="display:flex;align-items:center;gap:6px;font-size:13px;color:#8b949e;cursor:pointer;user-select:none" onclick="document.getElementById('chk-local').click()">
+            <input type="checkbox" id="chk-local" onchange="toggleTimezone()" style="accent-color:#58a6ff">Local Timezone
+            (<span id="tz-name"></span>)
+          </div>
+        </div>
         <table>
           <thead>
             <tr id="hourly-header"></tr>
@@ -359,6 +371,22 @@
       return d.innerHTML;
     }
 
+    let _lastData = null;
+
+    document.getElementById('tz-name').textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+    function toggleTimezone() {
+      if (_lastData) renderHourly(_lastData);
+    }
+
+    function fmtHour(utcStr) {
+      const useLocal = document.getElementById('chk-local').checked;
+      if (!useLocal) return esc(utcStr);
+      const d = new Date(utcStr);
+      const pad = n => String(n).padStart(2, '0');
+      return esc(`${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`);
+    }
+
     function renderResults(data) {
       document.getElementById('results').style.display = 'block';
       document.getElementById('res-token').textContent = data.token;
@@ -390,8 +418,13 @@
       const headerRow = document.getElementById('hourly-header');
       headerRow.innerHTML = '<th>Hour</th>' + allProv.map(p => `<th>${esc(p)}</th>`).join('') + '<th>Total</th>';
 
+      _lastData = { hourly: data.hourly, allProv };
+      renderHourly({ hourly: data.hourly, allProv });
+    }
+
+    function renderHourly({ hourly, allProv }) {
       const tbody = document.getElementById('hourly-body');
-      const entries = Object.entries(data.hourly).reverse();
+      const entries = Object.entries(hourly).reverse();
 
       if (entries.length === 0) {
         tbody.innerHTML = '';
@@ -404,13 +437,25 @@
 
       tbody.innerHTML = entries.map(([hour, counts]) => {
         const rowTotal = allProv.reduce((s, p) => s + (counts[p] || 0), 0);
+        const pct = (rowTotal / maxVal * 100).toFixed(1);
         const provCells = allProv.map(p => {
           const v = counts[p] || 0;
-          const pct = (v / maxVal * 100).toFixed(1);
-          return `<td><div class="bar-cell"><span>${v}</span><div class="bar" style="width:${pct}%"></div></div></td>`;
+          const pPct = (v / maxVal * 100).toFixed(1);
+          return `<td><div class="bar-cell"><span>${v}</span><div class="bar" style="width:${pPct}%"></div></div></td>`;
         }).join('');
-        return `<tr><td style="font-size:12px;color:#8b949e;white-space:nowrap">${esc(hour)}</td>${provCells}<td style="font-weight:600">${rowTotal}</td></tr>`;
+        return `<tr><td style="font-size:12px;color:#8b949e;white-space:nowrap">${fmtHour(hour)}</td>${provCells}<td><div class="bar-cell"><span>${rowTotal}</span><div class="bar" style="width:${pct}%;background:#58a6ff"></div></div></td></tr>`;
       }).join('');
+
+      requestAnimationFrame(() => {
+        let maxW = 0;
+        tbody.querySelectorAll('.bar-cell span').forEach(sp => {
+          sp.style.minWidth = '';
+          maxW = Math.max(maxW, sp.offsetWidth);
+        });
+        if (maxW > 0) {
+          tbody.querySelectorAll('.bar-cell span').forEach(sp => sp.style.minWidth = maxW + 'px');
+        }
+      });
     }
   </script>
 </body>

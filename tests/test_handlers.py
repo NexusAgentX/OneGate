@@ -83,6 +83,7 @@ class TestHandlers(AioHTTPTestCase):
             api_create_token,
             api_update_token,
             api_delete_token,
+            api_tokens_usage,
         ) = create_admin_handlers(self.cfg, self.db_conn, self.token_pool)
 
         app = web.Application()
@@ -194,6 +195,7 @@ class TestAdminAPI(AioHTTPTestCase):
             api_create_token,
             api_update_token,
             api_delete_token,
+            api_tokens_usage,
         ) = create_admin_handlers(self.cfg, self.db_conn, self.token_pool)
 
         app = web.Application()

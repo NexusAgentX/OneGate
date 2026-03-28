@@ -55,6 +55,14 @@ def _migrate_old_schema(conn: sqlite3.Connection):
         conn.commit()
         print("[DB] Migration complete: request_log primary key updated")
 
+    pool_cols = _get_columns(conn, "token_pool")
+    if pool_cols and "describe" not in pool_cols:
+        print("[DB] Migrating: adding 'describe' column to token_pool")
+        conn.execute(
+            "ALTER TABLE token_pool ADD COLUMN describe TEXT NOT NULL DEFAULT ''"
+        )
+        conn.commit()
+
 
 def _migrate_pool_json(
     conn: sqlite3.Connection, pool_file: str, admin_tokens: list[str]
@@ -89,8 +97,8 @@ def _migrate_pool_json(
             continue
         is_admin = t in admin_tokens
         conn.execute(
-            "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at, describe) "
+            "VALUES (?, ?, ?, ?, ?, '')",
             (t, json.dumps(provs), 1 if is_admin else 0, 1, now),
         )
         imported += 1
@@ -130,7 +138,8 @@ def init_db(
         "  providers   TEXT NOT NULL DEFAULT '[\"*\"]',"
         "  is_admin    INTEGER NOT NULL DEFAULT 0,"
         "  enabled     INTEGER NOT NULL DEFAULT 1,"
-        "  created_at  INTEGER NOT NULL"
+        "  created_at  INTEGER NOT NULL,"
+        "  describe    TEXT NOT NULL DEFAULT ''"
         ")"
     )
 
@@ -166,8 +175,8 @@ def init_db(
             if not exists:
                 now = int(time.time())
                 conn.execute(
-                    "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at) "
-                    "VALUES (?, ?, 1, 1, ?)",
+                    "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at, describe) "
+                    "VALUES (?, ?, 1, 1, ?, '')",
                     (t, '["*"]', now),
                 )
         conn.commit()
@@ -181,8 +190,8 @@ def init_db(
         for _ in range(need):
             t = make_token()
             conn.execute(
-                "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at) "
-                "VALUES (?, ?, 0, 1, ?)",
+                "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at, describe) "
+                "VALUES (?, ?, 0, 1, ?, '')",
                 (t, '["*"]', now),
             )
         conn.commit()
@@ -211,7 +220,7 @@ def record_usage(conn: sqlite3.Connection, token: str, provider_name: str):
 
 def get_all_tokens(conn: sqlite3.Connection) -> list[TokenEntry]:
     cur = conn.execute(
-        "SELECT token, providers, is_admin, enabled, created_at FROM token_pool "
+        "SELECT token, providers, is_admin, enabled, created_at, describe FROM token_pool "
         "ORDER BY created_at DESC"
     )
     return [TokenEntry.from_db_row(row) for row in cur.fetchall()]
@@ -219,7 +228,7 @@ def get_all_tokens(conn: sqlite3.Connection) -> list[TokenEntry]:
 
 def get_token(conn: sqlite3.Connection, token: str) -> TokenEntry | None:
     cur = conn.execute(
-        "SELECT token, providers, is_admin, enabled, created_at FROM token_pool WHERE token = ?",
+        "SELECT token, providers, is_admin, enabled, created_at, describe FROM token_pool WHERE token = ?",
         (token,),
     )
     row = cur.fetchone()
@@ -240,11 +249,14 @@ def add_token(
     token: str,
     providers: list[str],
     is_admin: bool = False,
+    describe: str = "",
 ) -> TokenEntry:
-    entry = TokenEntry(token=token, providers=providers, is_admin=is_admin)
+    entry = TokenEntry(
+        token=token, providers=providers, is_admin=is_admin, describe=describe
+    )
     conn.execute(
-        "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at, describe) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         entry.to_db_row(),
     )
     conn.commit()
@@ -257,6 +269,7 @@ def update_token(
     providers: list[str] | None = None,
     is_admin: bool | None = None,
     enabled: bool | None = None,
+    describe: str | None = None,
 ) -> TokenEntry | None:
     entry = get_token(conn, token)
     if not entry:
@@ -267,12 +280,15 @@ def update_token(
         entry.is_admin = is_admin
     if enabled is not None:
         entry.enabled = enabled
+    if describe is not None:
+        entry.describe = describe
     conn.execute(
-        "UPDATE token_pool SET providers=?, is_admin=?, enabled=? WHERE token=?",
+        "UPDATE token_pool SET providers=?, is_admin=?, enabled=?, describe=? WHERE token=?",
         (
             json.dumps(entry.providers),
             1 if entry.is_admin else 0,
             1 if entry.enabled else 0,
+            entry.describe,
             token,
         ),
     )
@@ -284,3 +300,23 @@ def delete_token(conn: sqlite3.Connection, token: str) -> bool:
     cur = conn.execute("DELETE FROM token_pool WHERE token = ?", (token,))
     conn.commit()
     return cur.rowcount > 0
+
+
+def get_tokens_usage_summary(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+    now = int(time.time())
+    thresholds = {
+        "1d": now - 1 * 86400,
+        "7d": now - 7 * 86400,
+        "30d": now - 30 * 86400,
+    }
+    result: dict[str, dict[str, int]] = {}
+    for key, ts_threshold in thresholds.items():
+        rows = conn.execute(
+            "SELECT token, SUM(count) FROM request_log WHERE ts >= ? GROUP BY token",
+            (ts_threshold,),
+        ).fetchall()
+        for token, count in rows:
+            if token not in result:
+                result[token] = {}
+            result[token][key] = count
+    return result

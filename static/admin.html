@@ -132,7 +132,28 @@
       font-family: monospace;
       font-size: 12px;
       word-break: break-all;
-      color: #79c0ff
+      color: #79c0ff;
+      cursor: pointer
+    }
+
+    .token-tip {
+      position: fixed;
+      z-index: 500;
+      background: #1c2128;
+      border: 1px solid #30363d;
+      color: #79c0ff;
+      font-family: monospace;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      pointer-events: none;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0,0,0,.4);
+      display: none
+    }
+
+    .token-tip.show {
+      display: block
     }
 
     .providers-cell {
@@ -469,6 +490,20 @@
       margin-top: 8px
     }
 
+    .login-box .remember-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-size: 13px;
+      color: #8b949e;
+      cursor: pointer
+    }
+
+    .login-box .remember-row input {
+      accent-color: #238636
+    }
+
     .admin-content {
       display: none
     }
@@ -481,6 +516,7 @@
 
 <body>
   <div class="toast-container" id="toast-container"></div>
+  <div class="token-tip" id="token-tip"></div>
 
   <div class="login-overlay" id="login-overlay">
     <div class="login-box">
@@ -489,6 +525,7 @@
         <label>Admin Token</label>
         <input type="text" id="login-token" placeholder="enter admin token..." autofocus>
       </div>
+      <label class="remember-row"><input type="checkbox" id="login-remember" checked>Remember me</label>
       <button class="btn btn-primary" style="width:100%;padding:10px" onclick="doLogin()">Login</button>
       <div class="error-msg" id="login-error"></div>
     </div>
@@ -514,9 +551,13 @@
         <thead>
           <tr>
             <th>Token</th>
+            <th>Describe</th>
             <th>Providers</th>
             <th>Admin</th>
             <th>Enabled</th>
+            <th>1d</th>
+            <th>7d</th>
+            <th>30d</th>
             <th>Created</th>
             <th>Actions</th>
           </tr>
@@ -531,6 +572,10 @@
         <div class="form-group">
           <label>Token (leave empty to auto-generate)</label>
           <input type="text" id="modal-token" placeholder="auto-generated">
+        </div>
+        <div class="form-group">
+          <label>Describe</label>
+          <input type="text" id="modal-describe" placeholder="describe the token usage..." style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,monospace">
         </div>
         <div class="form-group">
           <label>Providers</label>
@@ -606,11 +651,7 @@
 
     function copyToken(token) {
       if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(token).then(() => {
-          toast('Token copied', 'success');
-        }).catch(() => {
-          fallbackCopy(token);
-        });
+        navigator.clipboard.writeText(token).then(() => toast('Token copied', 'success')).catch(() => fallbackCopy(token));
       } else {
         fallbackCopy(token);
       }
@@ -623,24 +664,51 @@
       ta.style.left = '-9999px';
       document.body.appendChild(ta);
       ta.select();
-      try {
-        document.execCommand('copy');
-        toast('Token copied', 'success');
-      } catch (e) {
-        toast('Copy failed', 'error');
-      }
+      try { document.execCommand('copy'); toast('Token copied', 'success'); }
+      catch (e) { toast('Copy failed', 'error'); }
       document.body.removeChild(ta);
     }
+
+    (function () {
+      const tip = document.getElementById('token-tip');
+      document.addEventListener('mouseover', function (e) {
+        const cell = e.target.closest('.token-cell');
+        if (cell) {
+          tip.textContent = cell.dataset.full;
+          tip.classList.add('show');
+        }
+      });
+      document.addEventListener('mousemove', function (e) {
+        if (!tip.classList.contains('show')) return;
+        tip.style.left = (e.clientX + 12) + 'px';
+        tip.style.top = (e.clientY - 30) + 'px';
+      });
+      document.addEventListener('mouseout', function (e) {
+        if (e.target.closest && e.target.closest('.token-cell')) {
+          tip.classList.remove('show');
+        }
+      });
+      document.addEventListener('click', function (e) {
+        const cell = e.target.closest('.token-cell');
+        if (cell && cell.dataset.full) {
+          copyToken(cell.dataset.full);
+          tip.classList.remove('show');
+        }
+      });
+    })();
 
     function renderProviders(provs) {
       if (provs.includes('*')) return '<span class="tag tag-all">* (all)</span>';
       return provs.map(p => `<span class="tag">${esc(p)}</span>`).join('');
     }
 
-    function renderRow(t) {
+    function renderRow(t, usageMap) {
       const adminBadge = t.is_admin ? '<span class="badge badge-admin">Admin</span>' : '<span class="badge badge-user">User</span>';
+      const shortToken = t.token.slice(0, 6);
+      const u = usageMap[t.token] || {};
       return `<tr data-token="${esc(t.token)}">
-    <td class="token-cell">${esc(t.token)} <button class="copy-btn" onclick="copyToken('${esc(t.token)}')" title="Copy">copy</button></td>
+    <td class="token-cell" data-full="${esc(t.token)}">${esc(shortToken)}...</td>
+    <td style="font-size:12px;color:#8b949e;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.describe || '')}">${esc(t.describe || '-')}</td>
     <td><div class="providers-cell">${renderProviders(t.providers)}</div></td>
     <td>${adminBadge}</td>
     <td>
@@ -649,6 +717,9 @@
         <span class="slider"></span>
       </label>
     </td>
+    <td style="font-size:12px;color:#c9d1d9">${u['1d'] || 0}</td>
+    <td style="font-size:12px;color:#c9d1d9">${u['7d'] || 0}</td>
+    <td style="font-size:12px;color:#c9d1d9">${u['30d'] || 0}</td>
     <td style="font-size:12px;color:#8b949e">${fmtDate(t.created_at)}</td>
     <td>
       <button class="btn btn-sm" onclick="showEditModal('${esc(t.token)}')">Edit</button>
@@ -658,19 +729,23 @@
     }
 
     async function loadTokens() {
-      const { ok, data } = await api('GET', '/admin/api/tokens');
-      if (!ok) {
-        toast(data.error || 'Failed to load tokens');
+      const [tokensRes, usageRes] = await Promise.all([
+        api('GET', '/admin/api/tokens'),
+        api('GET', '/admin/api/tokens/usage'),
+      ]);
+      if (!tokensRes.ok) {
+        toast(tokensRes.data.error || 'Failed to load tokens');
         return;
       }
+      const usageMap = usageRes.ok ? (usageRes.data.usage || {}) : {};
       const tbody = document.getElementById('token-tbody');
-      if (!data.tokens || data.tokens.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">No tokens</td></tr>';
+      if (!tokensRes.data.tokens || tokensRes.data.tokens.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" class="empty">No tokens</td></tr>';
       } else {
-        tbody.innerHTML = data.tokens.map(renderRow).join('');
+        tbody.innerHTML = tokensRes.data.tokens.map(t => renderRow(t, usageMap)).join('');
       }
-      const total = data.tokens ? data.tokens.length : 0;
-      const admins = data.tokens ? data.tokens.filter(t => t.is_admin).length : 0;
+      const total = tokensRes.data.tokens ? tokensRes.data.tokens.length : 0;
+      const admins = tokensRes.data.tokens ? tokensRes.data.tokens.filter(t => t.is_admin).length : 0;
       document.getElementById('token-count').textContent = `${total} token(s)`;
       document.getElementById('stats').textContent = `${admins} admin(s) / ${total} total`;
     }
@@ -695,6 +770,7 @@
       document.getElementById('modal-title').textContent = 'New Token';
       document.getElementById('modal-token').value = '';
       document.getElementById('modal-token').disabled = false;
+      document.getElementById('modal-describe').value = '';
       document.getElementById('modal-admin').checked = false;
       buildProviderCheckboxes('modal-providers', ['*']);
       document.getElementById('modal-submit').textContent = 'Create';
@@ -713,6 +789,7 @@
       document.getElementById('modal-title').textContent = 'Edit Token';
       document.getElementById('modal-token').value = token;
       document.getElementById('modal-token').disabled = true;
+      document.getElementById('modal-describe').value = t.describe || '';
       document.getElementById('modal-admin').checked = t.is_admin;
       buildProviderCheckboxes('modal-providers', t.providers);
       document.getElementById('modal-submit').textContent = 'Save';
@@ -726,6 +803,7 @@
     async function submitModal() {
       const provs = getSelectedProviders('modal-providers');
       const isAdmin = document.getElementById('modal-admin').checked;
+      const describe = document.getElementById('modal-describe').value.trim();
       let result;
       if (!editingToken) {
         const customToken = document.getElementById('modal-token').value.trim();
@@ -733,12 +811,14 @@
           token: customToken || undefined,
           providers: provs,
           is_admin: isAdmin,
+          describe: describe,
         });
       } else {
         result = await api('PUT', '/admin/api/tokens', {
           token: editingToken,
           providers: provs,
           is_admin: isAdmin,
+          describe: describe,
         });
       }
       if (!result.ok) {
@@ -823,6 +903,7 @@
           return;
         }
         adminToken = token;
+        localStorage.setItem('admin_token', document.getElementById('login-remember').checked ? token : '');
         document.getElementById('login-overlay').classList.add('hidden');
         document.getElementById('admin-content').classList.add('active');
         loadTokens();
@@ -833,6 +914,7 @@
 
     function doLogout() {
       adminToken = null;
+      localStorage.removeItem('admin_token');
       document.getElementById('login-token').value = '';
       document.getElementById('login-overlay').classList.remove('hidden');
       document.getElementById('admin-content').classList.remove('active');
@@ -841,6 +923,15 @@
     document.getElementById('login-token').addEventListener('keydown', e => {
       if (e.key === 'Enter') doLogin();
     });
+
+    (function autoLogin() {
+      const saved = localStorage.getItem('admin_token');
+      if (saved) {
+        document.getElementById('login-token').value = saved;
+        document.getElementById('login-remember').checked = true;
+        doLogin();
+      }
+    })();
   </script>
 </body>
 

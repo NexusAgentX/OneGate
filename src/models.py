@@ -32,12 +32,14 @@ class TokenEntry:
         is_admin: bool = False,
         enabled: bool = True,
         created_at: int | None = None,
+        describe: str = "",
     ):
         self.token = token
         self.providers: list[str] = providers if providers is not None else ["*"]
         self.is_admin = is_admin
         self.enabled = enabled
         self.created_at = created_at or int(time.time())
+        self.describe = describe
 
     def has_permission(self, provider: Provider) -> bool:
         if not self.enabled:
@@ -53,6 +55,7 @@ class TokenEntry:
             1 if self.is_admin else 0,
             1 if self.enabled else 0,
             self.created_at,
+            self.describe,
         )
 
     @staticmethod
@@ -63,6 +66,7 @@ class TokenEntry:
             is_admin=bool(row[2]),
             enabled=bool(row[3]),
             created_at=row[4],
+            describe=row[5] if len(row) > 5 else "",
         )
 
     def to_dict(self) -> dict:
@@ -72,4 +76,5 @@ class TokenEntry:
             "is_admin": self.is_admin,
             "enabled": self.enabled,
             "created_at": self.created_at,
+            "describe": self.describe,
         }

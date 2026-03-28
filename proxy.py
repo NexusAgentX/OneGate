@@ -62,6 +62,7 @@ async def main():
         api_create_token,
         api_update_token,
         api_delete_token,
+        api_tokens_usage,
     ) = create_admin_handlers(cfg, db_conn, token_pool)
 
     app = web.Application(handler_args={"keepalive_timeout": 75})
@@ -73,6 +74,7 @@ async def main():
     app.router.add_post("/admin/api/tokens", api_create_token)
     app.router.add_put("/admin/api/tokens", api_update_token)
     app.router.add_delete("/admin/api/tokens", api_delete_token)
+    app.router.add_get("/admin/api/tokens/usage", api_tokens_usage)
     app.router.add_route("*", "/{path:.*}", proxy_handler)
 
     runner = web.AppRunner(app)

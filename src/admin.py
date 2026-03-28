@@ -9,6 +9,7 @@ from src.db import (
     add_token,
     delete_token,
     get_all_tokens,
+    get_tokens_usage_summary,
     is_admin_token,
     update_token,
 )
@@ -58,10 +59,11 @@ def create_admin_handlers(
 
         providers = body.get("providers", ["*"])
         is_admin = body.get("is_admin", False)
+        describe = body.get("describe", "")
         custom_token = body.get("token")
 
         token = custom_token if custom_token else make_token()
-        entry = add_token(db_conn, token, providers, is_admin)
+        entry = add_token(db_conn, token, providers, is_admin, describe=describe)
         token_pool[entry.token] = entry
         return web.json_response({"token": entry.to_dict()})
 
@@ -82,6 +84,7 @@ def create_admin_handlers(
         providers = body.get("providers")
         is_admin = body.get("is_admin")
         enabled = body.get("enabled")
+        describe = body.get("describe")
 
         if is_admin is False and target == admin_token:
             return web.json_response(
@@ -93,7 +96,12 @@ def create_admin_handlers(
             )
 
         entry = update_token(
-            db_conn, target, providers=providers, is_admin=is_admin, enabled=enabled
+            db_conn,
+            target,
+            providers=providers,
+            is_admin=is_admin,
+            enabled=enabled,
+            describe=describe,
         )
         if not entry:
             return web.json_response({"error": "token not found"}, status=404)
@@ -126,10 +134,19 @@ def create_admin_handlers(
         token_pool.pop(target, None)
         return web.json_response({"ok": True})
 
+    async def api_tokens_usage(request: web.Request) -> web.Response:
+        admin_token = _get_admin_token(request)
+        if not admin_token or not is_admin_token(db_conn, admin_token):
+            return web.json_response({"error": "unauthorized"}, status=403)
+
+        usage = get_tokens_usage_summary(db_conn)
+        return web.json_response({"usage": usage})
+
     return (
         serve_admin_page,
         api_list_tokens,
         api_create_token,
         api_update_token,
         api_delete_token,
+        api_tokens_usage,
     )
