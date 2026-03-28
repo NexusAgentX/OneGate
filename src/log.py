@@ -4,7 +4,6 @@ import json
 import os
 from datetime import datetime, timezone
 
-
 LOG_DIR = "logs"
 
 
@@ -59,3 +58,31 @@ def save_log(
     log_file = os.path.join(LOG_DIR, f"{now}.json")
     with open(log_file, "w", encoding="utf-8") as f:
         json.dump(log_entry, f, ensure_ascii=False, indent=2)
+
+
+def save_log_headers_only(
+    request_method: str,
+    request_path: str,
+    req_headers,
+    resp_status: int,
+    resp_headers: dict,
+    forward_headers: dict,
+    provider_name: str,
+):
+    _ensure_log_dir()
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%Y-%m-%d")
+    ts_str = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond:06d}Z"
+    log_entry = {
+        "ts": ts_str,
+        "method": request_method,
+        "path": request_path,
+        "provider": provider_name,
+        "status": resp_status,
+        "req_headers": dict(req_headers),
+        "forward_headers": dict(forward_headers),
+        "resp_headers": dict(resp_headers),
+    }
+    log_file = os.path.join(LOG_DIR, f"{date_str}.jsonl")
+    with open(log_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")

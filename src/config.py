@@ -15,6 +15,7 @@ class AppConfig:
     bind_port: int = 5678
     intercept_port: int = 0
     enable_log: bool = False
+    log_format: str = "full"
     pool_count: int = 5
     pool_file: str = "pool.json"
     usage_db: str = "data/onegate.db"
@@ -53,6 +54,7 @@ def load_config(config_dir: str | None = None) -> AppConfig:
     cfg.bind_port = data.get("bind_port", 5678)
     cfg.intercept_port = data.get("intercept_port", 0)
     cfg.enable_log = data.get("enable_log", False)
+    cfg.log_format = data.get("log_format", "full")
 
     timeout_cfg = data.get("timeout", {})
     env_total = os.environ.get("TIMEOUT_TOTAL")

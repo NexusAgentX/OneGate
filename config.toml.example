@@ -1,6 +1,7 @@
 bind_port = 5678
 intercept_port = 0
 enable_log = false
+# log_format = "full"   # "full" = per-request .json with body (default), "headers" = daily .jsonl with headers only
 
 [timeout]
 total = 1800

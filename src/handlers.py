@@ -10,7 +10,7 @@ from aiohttp import web
 
 from src.config import AppConfig, match_provider
 from src.db import record_usage
-from src.log import save_log
+from src.log import save_log, save_log_headers_only
 from src.models import TokenEntry
 from src.pool import resolve_token
 
@@ -210,7 +210,7 @@ def create_handlers(
 
                 resp_chunks = []
                 async for chunk in resp.content.iter_any():
-                    if cfg.enable_log:
+                    if cfg.enable_log and cfg.log_format == "full":
                         resp_chunks.append(chunk)
                     await response.write(chunk)
 
@@ -218,17 +218,28 @@ def create_handlers(
 
                 resp_body = b"".join(resp_chunks) if resp_chunks else None
                 if cfg.enable_log:
-                    save_log(
-                        request.method,
-                        request.path,
-                        request.headers,
-                        body,
-                        resp.status,
-                        resp_headers,
-                        resp_body,
-                        headers,
-                        target_url,
-                    )
+                    if cfg.log_format == "headers":
+                        save_log_headers_only(
+                            request.method,
+                            request.path,
+                            request.headers,
+                            resp.status,
+                            resp_headers,
+                            headers,
+                            provider.name,
+                        )
+                    else:
+                        save_log(
+                            request.method,
+                            request.path,
+                            request.headers,
+                            body,
+                            resp.status,
+                            resp_headers,
+                            resp_body,
+                            headers,
+                            target_url,
+                        )
                 if proxy_token:
                     record_usage(db_conn, proxy_token, provider.name)
                 logger.info(
