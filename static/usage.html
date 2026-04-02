@@ -117,11 +117,14 @@
     }
 
     .recent-token-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
       font-size: 11px;
       color: #58a6ff;
       background: #0d1117;
       border: 1px solid #30363d;
-      padding: 2px 8px;
+      padding: 2px 4px 2px 8px;
       border-radius: 10px;
       cursor: pointer;
       font-family: monospace;
@@ -135,6 +138,23 @@
     .recent-token-tag:hover {
       background: #1c2128;
       border-color: #58a6ff
+    }
+
+    .recent-token-tag .tag-close {
+      flex-shrink: 0;
+      font-size: 14px;
+      line-height: 1;
+      color: #484f58;
+      cursor: pointer;
+      padding: 0 3px;
+      margin-left: 4px;
+      border-radius: 50%;
+      transition: color .15s, background .15s
+    }
+
+    .recent-token-tag .tag-close:hover {
+      color: #f85149;
+      background: rgba(248,81,73,.15)
     }
   </style>
 </head>
@@ -231,13 +251,20 @@
       el.innerHTML = list.map(item => {
         const short = item.t.slice(0, 6) + '...';
         const label = item.d ? `${short} ${item.d}` : short;
-        return `<span class="recent-token-tag" data-t="${esc(item.t)}" onclick="selectRecent(this)" title="${esc(item.t)}${item.d ? ' — ' + item.d : ''}">${esc(label)}</span>`;
+        return `<span class="recent-token-tag" data-t="${esc(item.t)}" onclick="selectRecent(this)" title="${esc(item.t)}${item.d ? ' — ' + item.d : ''}">${esc(label)}<span onclick="event.stopPropagation();removeRecent('${esc(item.t)}')" class="tag-close">&times;</span></span>`;
       }).join('');
     }
 
     function selectRecent(el) {
       inputToken.value = el.dataset.t;
       queryUsage();
+    }
+
+    function removeRecent(token) {
+      let list = JSON.parse(localStorage.getItem('_recent_tokens') || '[]');
+      list = list.filter(x => x.t !== token);
+      localStorage.setItem('_recent_tokens', JSON.stringify(list));
+      renderRecentTokens();
     }
 
     async function queryUsage() {
