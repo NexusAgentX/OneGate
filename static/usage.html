@@ -76,6 +76,11 @@
       font-variant-numeric: tabular-nums
     }
 
+    .bar-track {
+      flex: 1;
+      min-width: 0
+    }
+
     .bar {
       height: 16px;
       background: #238636;
@@ -394,9 +399,9 @@
         const provCells = allProv.map(p => {
           const v = counts[p] || 0;
           const pPct = (v / maxVal * 100).toFixed(1);
-          return `<td><div class="bar-cell"><span>${v}</span><div class="bar" style="width:${pPct}%"></div></div></td>`;
+          return `<td><div class="bar-cell"><span>${v}</span><div class="bar-track"><div class="bar" style="width:${pPct}%"></div></div></div></td>`;
         }).join('');
-        return `<tr><td style="font-size:12px;color:#8b949e;white-space:nowrap">${fmtHour(hour)}</td>${provCells}<td><div class="bar-cell"><span>${rowTotal}</span><div class="bar" style="width:${pct}%;background:#58a6ff"></div></div></td></tr>`;
+        return `<tr><td style="font-size:12px;color:#8b949e;white-space:nowrap">${fmtHour(hour)}</td>${provCells}<td><div class="bar-cell"><span>${rowTotal}</span><div class="bar-track"><div class="bar" style="width:${pct}%;background:#58a6ff"></div></div></div></td></tr>`;
       }).join('');
 
       requestAnimationFrame(() => {
