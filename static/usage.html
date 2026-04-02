@@ -5,60 +5,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Usage Query</title>
+  <link rel="stylesheet" href="/static/common.css">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-      background: #0d1117;
-      color: #c9d1d9;
-      min-height: 100vh
-    }
-
-    .header {
-      background: #161b22;
-      border-bottom: 1px solid #30363d;
-      padding: 16px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center
-    }
-
-    .header h1 {
-      font-size: 18px;
-      color: #58a6ff
-    }
-
     .container {
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 24px
-    }
-
-    .card {
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 20px
-    }
-
-    .card h3 {
-      font-size: 13px;
-      color: #8b949e;
-      text-transform: uppercase;
-      letter-spacing: .5px;
-      margin-bottom: 14px
+      max-width: 960px
     }
 
     .form-row {
       display: flex;
       gap: 12px;
-      align-items: flex-end;
+      align-items: flex-start;
       flex-wrap: wrap
     }
 
@@ -96,108 +52,16 @@
       font-family: inherit
     }
 
-    .btn {
-      background: #21262d;
-      border: 1px solid #30363d;
-      color: #c9d1d9;
-      padding: 8px 20px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      transition: background .15s;
-      white-space: nowrap
-    }
-
-    .btn:hover {
-      background: #30363d
-    }
-
-    .btn-primary {
-      background: #238636;
-      border-color: #2ea043;
-      color: #fff
-    }
-
-    .btn-primary:hover {
-      background: #2ea043
-    }
-
-    .btn-sm {
-      padding: 4px 12px;
-      font-size: 12px
-    }
-
     .summary-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 12px
-    }
-
-    .summary-item {
-      background: #0d1117;
-      border: 1px solid #21262d;
-      border-radius: 6px;
-      padding: 14px;
-      text-align: center
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr))
     }
 
     .summary-item .value {
-      font-size: 28px;
-      font-weight: 700;
-      color: #58a6ff
-    }
-
-    .summary-item .label {
-      font-size: 11px;
-      color: #8b949e;
-      margin-top: 4px;
-      text-transform: uppercase;
-      letter-spacing: .5px
+      font-size: 28px
     }
 
     .summary-item.current .value {
       color: #3fb950
-    }
-
-    .token-info {
-      font-size: 12px;
-      color: #8b949e;
-      margin-bottom: 16px
-    }
-
-    .token-info code {
-      color: #79c0ff;
-      background: #0d1117;
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-family: monospace;
-      word-break: break-all
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse
-    }
-
-    th {
-      background: #21262d;
-      padding: 8px 12px;
-      text-align: left;
-      color: #8b949e;
-      font-weight: 600;
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: .5px
-    }
-
-    td {
-      padding: 6px 12px;
-      border-top: 1px solid #21262d;
-      font-size: 13px
-    }
-
-    tr:hover td {
-      background: #1c2128
     }
 
     .bar-cell {
@@ -220,17 +84,19 @@
       transition: width .3s
     }
 
-    .error-msg {
-      color: #f85149;
-      font-size: 13px;
-      padding: 8px 0
+    .token-info {
+      font-size: 12px;
+      color: #8b949e;
+      margin-bottom: 16px
     }
 
-    .loading {
-      text-align: center;
-      padding: 40px;
-      color: #484f58;
-      font-size: 14px
+    .token-info code {
+      color: #79c0ff;
+      background: #0d1117;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: monospace;
+      word-break: break-all
     }
 
     .providers-tag {
@@ -239,22 +105,36 @@
       flex-wrap: wrap
     }
 
-    .tag {
-      background: #1f2937;
-      border: 1px solid #30363d;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 11px;
-      color: #c9d1d9
-    }
-
-    .tag-all {
-      border-color: #238636;
-      color: #3fb950
-    }
-
     #results {
       display: none
+    }
+
+    .recent-tokens {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px
+    }
+
+    .recent-token-tag {
+      font-size: 11px;
+      color: #58a6ff;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      padding: 2px 8px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-family: monospace;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      transition: background .15s
+    }
+
+    .recent-token-tag:hover {
+      background: #1c2128;
+      border-color: #58a6ff
     }
   </style>
 </head>
@@ -270,6 +150,7 @@
         <div class="form-group" style="flex:2">
           <label>Token</label>
           <input type="text" id="input-token" placeholder="enter your proxy token...">
+          <div class="recent-tokens" id="recent-tokens"></div>
         </div>
         <div class="form-group">
           <label>Start (optional)</label>
@@ -288,7 +169,7 @@
       <div class="card">
         <h3>Token Info</h3>
         <div class="token-info">
-          Token: <code id="res-token"></code>
+          Token: <code id="res-token"></code> <span id="res-describe" style="font-size:12px;color:#8b949e"></span>
           <br>Providers: <span class="providers-tag" id="res-providers"></span>
         </div>
         <div class="summary-grid" id="summary-grid"></div>
@@ -322,6 +203,43 @@
 
     inputToken.addEventListener('keydown', e => { if (e.key === 'Enter') queryUsage(); });
 
+    // Auto-fill token from localStorage (set by admin page)
+    (function initFromStorage() {
+      const raw = localStorage.getItem('_usage_token');
+      if (raw) {
+        localStorage.removeItem('_usage_token');
+        try { var obj = JSON.parse(raw); inputToken.value = obj.t || raw; }
+        catch (e) { inputToken.value = raw; }
+        queryUsage();
+      }
+      renderRecentTokens();
+    })();
+
+    function saveRecentToken(token, desc) {
+      let list = JSON.parse(localStorage.getItem('_recent_tokens') || '[]');
+      list = list.filter(x => x.t !== token);
+      list.unshift({ t: token, d: desc || '' });
+      list = list.slice(0, 10);
+      localStorage.setItem('_recent_tokens', JSON.stringify(list));
+      renderRecentTokens();
+    }
+
+    function renderRecentTokens() {
+      const el = document.getElementById('recent-tokens');
+      const list = JSON.parse(localStorage.getItem('_recent_tokens') || '[]');
+      if (list.length === 0) { el.innerHTML = ''; return; }
+      el.innerHTML = list.map(item => {
+        const short = item.t.slice(0, 6) + '...';
+        const label = item.d ? `${short} ${item.d}` : short;
+        return `<span class="recent-token-tag" data-t="${esc(item.t)}" onclick="selectRecent(this)" title="${esc(item.t)}${item.d ? ' — ' + item.d : ''}">${esc(label)}</span>`;
+      }).join('');
+    }
+
+    function selectRecent(el) {
+      inputToken.value = el.dataset.t;
+      queryUsage();
+    }
+
     async function queryUsage() {
       const token = inputToken.value.trim();
       if (!token) {
@@ -349,6 +267,7 @@
           return;
         }
         renderResults(data);
+        saveRecentToken(token, data.describe || '');
       } catch (e) {
         document.getElementById('loading').style.display = 'none';
         showError('Network error: ' + e.message);
@@ -390,6 +309,13 @@
     function renderResults(data) {
       document.getElementById('results').style.display = 'block';
       document.getElementById('res-token').textContent = data.token;
+      const descEl = document.getElementById('res-describe');
+      if (data.describe) {
+        descEl.textContent = '(' + data.describe + ')';
+        descEl.style.display = '';
+      } else {
+        descEl.style.display = 'none';
+      }
 
       const provsEl = document.getElementById('res-providers');
       if (data.providers.includes('*')) {

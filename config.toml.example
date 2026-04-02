@@ -8,6 +8,11 @@ total = 1800
 connect = 30
 sock_read = 900
 
+[compression]
+# Whether to decompress response body before writing to log files.
+# Supports: gzip, deflate, br (requires brotli package), zstd (requires zstandard package).
+decompress_log = true
+
 [pool]
 count = 10
 usage_db = "data/onegate.db"

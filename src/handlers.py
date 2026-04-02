@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
 from aiohttp import web
 
 from src.config import AppConfig, match_provider
-from src.db import record_usage
+from src.db import get_provider_status, record_status, record_usage
 from src.log import save_log, save_log_headers_only
 from src.models import TokenEntry
 from src.pool import resolve_token
@@ -97,6 +98,7 @@ async def _query_usage(token, token_pool, db_conn, start_str=None, end_str=None)
     return {
         "token": token,
         "providers": entry.providers,
+        "describe": getattr(entry, 'describe', ''),
         "current_hour": current_hour,
         "range": {
             "start": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -114,6 +116,7 @@ def create_handlers(
     db_conn,
     public_ip: str | None,
     session: aiohttp.ClientSession,
+    start_time: float,
 ):
     async def serve_usage_page(request: web.Request) -> web.Response:
         html_path = os.path.join(STATIC_DIR, "usage.html")
@@ -201,6 +204,7 @@ def create_handlers(
             ) as resp:
                 resp_headers = dict(resp.headers)
                 resp_headers.pop("Transfer-Encoding", None)
+                resp_headers.pop("Content-Length", None)
 
                 response = web.StreamResponse(
                     status=resp.status,
@@ -239,9 +243,11 @@ def create_handlers(
                             resp_body,
                             headers,
                             target_url,
+                            decompress=cfg.decompress_log,
                         )
                 if proxy_token:
                     record_usage(db_conn, proxy_token, provider.name)
+                record_status(db_conn, provider.name, resp.status)
                 logger.info(
                     "%s %s -> [%s] %s",
                     request.method,
@@ -253,6 +259,7 @@ def create_handlers(
                 return response
 
         except asyncio.TimeoutError:
+            record_status(db_conn, provider.name, 504)
             logger.error(
                 "Timeout proxying %s %s -> [%s] %s",
                 request.method,
@@ -265,6 +272,7 @@ def create_handlers(
                 status=504,
             )
         except aiohttp.ClientError as e:
+            record_status(db_conn, provider.name, 502)
             logger.error(
                 "Client error proxying %s %s -> [%s] %s: %s",
                 request.method,
@@ -278,4 +286,37 @@ def create_handlers(
                 status=502,
             )
 
-    return serve_usage_page, info_api_handler, proxy_handler
+    async def serve_status_page(request: web.Request) -> web.Response:
+        html_path = os.path.join(STATIC_DIR, "status.html")
+        if not os.path.exists(html_path):
+            return web.json_response({"error": "status.html not found"}, status=500)
+        with open(html_path, "r", encoding="utf-8") as f:
+            return web.Response(text=f.read(), content_type="text/html")
+
+    async def status_api_handler(request: web.Request) -> web.Response:
+        uptime = int(time.time() - start_time)
+        providers = [
+            {
+                "name": p.name,
+                "prefix": p.prefix,
+                "upstream": p.upstream,
+            }
+            for p in cfg.providers
+        ]
+        stats = get_provider_status(db_conn)
+        return web.json_response(
+            {
+                "uptime": uptime,
+                "providers": providers,
+                "stats": stats.get("hourly", {}),
+                "summary": {k: v for k, v in stats.items() if k != "hourly"},
+            }
+        )
+
+    return (
+        serve_usage_page,
+        info_api_handler,
+        proxy_handler,
+        serve_status_page,
+        status_api_handler,
+    )

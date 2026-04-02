@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import os
 import ssl
 import tempfile
+import time
 
 import aiohttp
 from aiohttp import web
@@ -73,8 +74,13 @@ class TestHandlers(AioHTTPTestCase):
             skip_auto_headers={"User-Agent"},
         )
 
-        serve_usage_page, info_api_handler, proxy_handler = create_handlers(
-            self.cfg, self.token_pool, self.db_conn, self.public_ip, self.session
+        serve_usage_page, info_api_handler, proxy_handler, _, _ = create_handlers(
+            self.cfg,
+            self.token_pool,
+            self.db_conn,
+            self.public_ip,
+            self.session,
+            time.time(),
         )
 
         (
@@ -186,8 +192,13 @@ class TestAdminAPI(AioHTTPTestCase):
             skip_auto_headers={"User-Agent"},
         )
 
-        serve_usage_page, info_api_handler, proxy_handler = create_handlers(
-            self.cfg, self.token_pool, self.db_conn, self.public_ip, self.session
+        serve_usage_page, info_api_handler, proxy_handler, _, _ = create_handlers(
+            self.cfg,
+            self.token_pool,
+            self.db_conn,
+            self.public_ip,
+            self.session,
+            time.time(),
         )
         (
             serve_admin_page,

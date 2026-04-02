@@ -25,6 +25,7 @@ class AppConfig:
     timeout_total: int = 1800
     timeout_connect: int = 30
     timeout_sock_read: int = 900
+    decompress_log: bool = True
 
 
 def load_config(config_dir: str | None = None) -> AppConfig:
@@ -67,6 +68,9 @@ def load_config(config_dir: str | None = None) -> AppConfig:
     cfg.timeout_sock_read = (
         int(env_sock_read) if env_sock_read else timeout_cfg.get("sock_read", 900)
     )
+
+    compression_cfg = data.get("compression", {})
+    cfg.decompress_log = compression_cfg.get("decompress_log", True)
 
     pool_cfg = data.get("pool", {})
     env_pool_count = os.environ.get("POOL_COUNT")

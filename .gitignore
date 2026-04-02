@@ -14,8 +14,6 @@ intercept_logs/
 
 .opencode/
 
-.env
-
 config.toml
 
 usage.db

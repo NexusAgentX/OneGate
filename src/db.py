@@ -143,6 +143,16 @@ def init_db(
         ")"
     )
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS status_log ("
+        "  provider    TEXT NOT NULL,"
+        "  status_code INTEGER NOT NULL,"
+        "  ts          INTEGER NOT NULL,"
+        "  count       INTEGER NOT NULL DEFAULT 1,"
+        "  PRIMARY KEY (provider, status_code, ts)"
+        ")"
+    )
+
     conn.execute("UPDATE token_pool SET enabled = 1 WHERE enabled = 0")
     conn.commit()
 
@@ -199,6 +209,9 @@ def init_db(
 
     conn.execute(
         "DELETE FROM request_log WHERE ts < ?", (int(time.time()) - 35 * 86400,)
+    )
+    conn.execute(
+        "DELETE FROM status_log WHERE ts < ?", (int(time.time()) - 35 * 86400,)
     )
     conn.commit()
 
@@ -319,4 +332,90 @@ def get_tokens_usage_summary(conn: sqlite3.Connection) -> dict[str, dict[str, in
             if token not in result:
                 result[token] = {}
             result[token][key] = count
+    return result
+
+
+def record_status(conn: sqlite3.Connection, provider: str, status_code: int):
+    now = int(time.time())
+    hour_ts = now - (now % 3600)
+    conn.execute(
+        "INSERT INTO status_log (provider, status_code, ts, count) VALUES (?, ?, ?, 1) "
+        "ON CONFLICT(provider, status_code, ts) DO UPDATE SET count = count + 1",
+        (provider, status_code, hour_ts),
+    )
+    conn.commit()
+
+
+def get_provider_status(conn: sqlite3.Connection, hours: int = 168) -> dict:
+    now = int(time.time())
+    current_hour_ts = now - (now % 3600)
+    start_hour_ts = current_hour_ts - (hours - 1) * 3600
+    thresholds = {
+        "1h": now - 3600,
+        "24h": now - 86400,
+        "7d": now - 7 * 86400,
+        "30d": now - 30 * 86400,
+    }
+
+    all_providers_row = conn.execute(
+        "SELECT DISTINCT provider FROM status_log WHERE ts >= ?", (start_hour_ts,)
+    ).fetchall()
+    provider_names = [r[0] for r in all_providers_row]
+
+    all_providers_for_summary = conn.execute(
+        "SELECT DISTINCT provider FROM status_log"
+    ).fetchall()
+    all_provider_names = [r[0] for r in all_providers_for_summary]
+
+    result: dict[str, dict] = {"hourly": {}}
+    for pname in provider_names:
+        rows = conn.execute(
+            "SELECT ts, status_code, count FROM status_log "
+            "WHERE provider = ? AND ts >= ? ORDER BY ts, status_code",
+            (pname, start_hour_ts),
+        ).fetchall()
+
+        by_hour: dict[int, list[tuple[int, int]]] = {}
+        for ts, sc, count in rows:
+            by_hour.setdefault(ts, []).append((sc, count))
+
+        hourly_data = []
+        t = start_hour_ts
+        while t <= current_hour_ts:
+            entries = by_hour.get(t, [])
+            total = sum(c for _, c in entries)
+            success = sum(c for sc, c in entries if 200 <= sc < 300)
+            errors = {str(sc): c for sc, c in entries if sc >= 400}
+            hourly_data.append(
+                {
+                    "ts": t,
+                    "total": total,
+                    "success": success,
+                    "success_rate": round(success / total * 100, 2)
+                    if total > 0
+                    else None,
+                    "error_distribution": errors,
+                }
+            )
+            t += 3600
+        result["hourly"][pname] = hourly_data
+
+    for pname in all_provider_names:
+        result[pname] = {}
+        for period, ts_cutoff in thresholds.items():
+            rows = conn.execute(
+                "SELECT status_code, SUM(count) FROM status_log "
+                "WHERE provider = ? AND ts >= ? GROUP BY status_code "
+                "ORDER BY status_code",
+                (pname, ts_cutoff),
+            ).fetchall()
+            total = sum(c for _, c in rows)
+            success = sum(c for sc, c in rows if 200 <= sc < 300)
+            error_dist = {str(sc): c for sc, c in rows if sc >= 400}
+            result[pname][period] = {
+                "total": total,
+                "success": success,
+                "success_rate": round(success / total * 100, 2) if total > 0 else None,
+                "error_distribution": error_dist,
+            }
     return result

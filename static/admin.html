@@ -5,43 +5,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Token Management</title>
+  <link rel="stylesheet" href="/static/common.css">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-      background: #0d1117;
-      color: #c9d1d9;
-      min-height: 100vh
-    }
-
-    .header {
+    table {
       background: #161b22;
-      border-bottom: 1px solid #30363d;
-      padding: 16px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      overflow: hidden
     }
 
-    .header h1 {
-      font-size: 18px;
-      color: #58a6ff
+    th {
+      padding: 10px 14px;
+      text-align: center
     }
 
-    .header .info {
-      font-size: 12px;
-      color: #8b949e
-    }
-
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      padding: 24px
+    td {
+      padding: 10px 14px;
+      vertical-align: middle;
+      text-align: center
     }
 
     .toolbar {
@@ -54,77 +35,6 @@
     .toolbar h2 {
       font-size: 14px;
       color: #8b949e
-    }
-
-    .btn {
-      background: #21262d;
-      border: 1px solid #30363d;
-      color: #c9d1d9;
-      padding: 6px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      transition: background .15s
-    }
-
-    .btn:hover {
-      background: #30363d
-    }
-
-    .btn-primary {
-      background: #238636;
-      border-color: #2ea043;
-      color: #fff
-    }
-
-    .btn-primary:hover {
-      background: #2ea043
-    }
-
-    .btn-danger {
-      background: #da3633;
-      border-color: #f85149;
-      color: #fff
-    }
-
-    .btn-danger:hover {
-      background: #f85149
-    }
-
-    .btn-sm {
-      padding: 3px 10px;
-      font-size: 12px
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #161b22;
-      border: 1px solid #30363d;
-      border-radius: 8px;
-      overflow: hidden
-    }
-
-    th {
-      background: #21262d;
-      padding: 10px 14px;
-      text-align: center;
-      color: #8b949e;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: .5px
-    }
-
-    td {
-      padding: 10px 14px;
-      border-top: 1px solid #21262d;
-      font-size: 13px;
-      vertical-align: middle;
-      text-align: center
-    }
-
-    tr:hover td {
-      background: #1c2128
     }
 
     .token-cell {
@@ -161,20 +71,6 @@
       gap: 4px;
       flex-wrap: wrap;
       justify-content: center
-    }
-
-    .tag {
-      background: #1f2937;
-      border: 1px solid #30363d;
-      padding: 2px 8px;
-      border-radius: 12px;
-      font-size: 11px;
-      color: #c9d1d9
-    }
-
-    .tag-all {
-      border-color: #238636;
-      color: #3fb950
     }
 
     .tag-admin {
@@ -376,13 +272,6 @@
       gap: 8px;
       justify-content: flex-end;
       margin-top: 20px
-    }
-
-    .empty {
-      text-align: center;
-      padding: 40px;
-      color: #484f58;
-      font-size: 14px
     }
 
     .copy-btn {
@@ -723,6 +612,7 @@
     <td style="font-size:12px;color:#8b949e">${fmtDate(t.created_at)}</td>
     <td>
       <button class="btn btn-sm" onclick="showEditModal('${esc(t.token)}')">Edit</button>
+      <button class="btn btn-sm" onclick="openUsage('${esc(t.token)}')">Usage</button>
       <button class="btn btn-sm btn-danger" onclick="confirmDelete('${esc(t.token)}')">Delete</button>
     </td>
   </tr>`;
@@ -867,6 +757,13 @@
       if (ok) {
         await deleteToken(token);
       }
+    }
+
+    function openUsage(token) {
+      const row = document.querySelector(`tr[data-token="${CSS.escape(token)}"]`);
+      const desc = row ? (row.querySelector('td:nth-child(2)')?.title || '') : '';
+      localStorage.setItem('_usage_token', JSON.stringify({ t: token, d: desc }));
+      window.open('/usage', '_blank');
     }
 
     async function deleteToken(token) {

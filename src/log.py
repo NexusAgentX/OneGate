@@ -1,20 +1,57 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
+import zlib
 from datetime import datetime, timezone
 
+try:
+    import brotli
+
+    _HAS_BROTLI = True
+except ImportError:
+    _HAS_BROTLI = False
+
+try:
+    import zstandard
+
+    _HAS_ZSTD = True
+except ImportError:
+    _HAS_ZSTD = False
+
 LOG_DIR = "logs"
+
+
+def _decompress_body(encoding: str, body: bytes) -> bytes:
+    if not encoding:
+        return body
+    if encoding == "gzip":
+        return gzip.decompress(body)
+    if encoding == "deflate":
+        return zlib.decompress(body)
+    if encoding == "br":
+        if _HAS_BROTLI:
+            return brotli.decompress(body)
+    if encoding == "zstd":
+        if _HAS_ZSTD:
+            return zstandard.ZstdDecompressor().decompress(body)
+    return body
 
 
 def _ensure_log_dir():
     os.makedirs(LOG_DIR, exist_ok=True)
 
 
-def _try_parse_json_body(headers, body: bytes | None) -> bytes | dict | list | None:
+def _try_parse_json_body(
+    headers, body: bytes | None, decompress: bool = False
+) -> bytes | dict | list | str | None:
     if not body:
         return None
-    content_type = headers.get("Content-Type", "")
+    if decompress:
+        encoding = headers.get("Content-Encoding", "") if headers else ""
+        body = _decompress_body(encoding, body)
+    content_type = headers.get("Content-Type", "") if headers else ""
     if "application/json" in content_type:
         try:
             return json.loads(body)
@@ -33,6 +70,7 @@ def save_log(
     resp_body: bytes | None,
     forward_headers: dict,
     target_url: str,
+    decompress: bool = False,
 ):
     _ensure_log_dir()
     now = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
@@ -42,17 +80,21 @@ def save_log(
             "method": request_method,
             "path": request_path,
             "headers": dict(req_headers),
-            "body": _try_parse_json_body(req_headers, req_body),
+            "body": _try_parse_json_body(req_headers, req_body, decompress=decompress),
         },
         "forward": {
             "url": target_url,
             "headers": dict(forward_headers),
-            "body": _try_parse_json_body(forward_headers, req_body),
+            "body": _try_parse_json_body(
+                forward_headers, req_body, decompress=decompress
+            ),
         },
         "response": {
             "status": resp_status,
             "headers": dict(resp_headers),
-            "body": _try_parse_json_body(resp_headers, resp_body),
+            "body": _try_parse_json_body(
+                resp_headers, resp_body, decompress=decompress
+            ),
         },
     }
     log_file = os.path.join(LOG_DIR, f"{now}.json")

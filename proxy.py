@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import os
 import ssl
+import time
 
 import aiohttp
 from aiohttp import web
@@ -12,6 +14,8 @@ from src.db import init_db
 from src.handlers import create_handlers
 from src.network import fetch_public_ip
 from src.pool import load_pool_from_db
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -47,14 +51,19 @@ async def main():
         connector=connector,
         timeout=timeout,
         skip_auto_headers={"User-Agent"},
+        auto_decompress=False,
     )
 
     async def on_cleanup(app: web.Application):
         await session.close()
 
-    serve_usage_page, info_api_handler, proxy_handler = create_handlers(
-        cfg, token_pool, db_conn, public_ip, session
-    )
+    (
+        serve_usage_page,
+        info_api_handler,
+        proxy_handler,
+        serve_status_page,
+        status_api_handler,
+    ) = create_handlers(cfg, token_pool, db_conn, public_ip, session, time.time())
 
     (
         serve_admin_page,
@@ -67,6 +76,7 @@ async def main():
 
     app = web.Application(handler_args={"keepalive_timeout": 75})
     app.on_cleanup.append(on_cleanup)
+    app.router.add_static("/static", STATIC_DIR)
     app.router.add_get("/usage", serve_usage_page)
     app.router.add_post("/usage/api", info_api_handler)
     app.router.add_get("/admin", serve_admin_page)
@@ -75,6 +85,8 @@ async def main():
     app.router.add_put("/admin/api/tokens", api_update_token)
     app.router.add_delete("/admin/api/tokens", api_delete_token)
     app.router.add_get("/admin/api/tokens/usage", api_tokens_usage)
+    app.router.add_get("/status", serve_status_page)
+    app.router.add_get("/status/api", status_api_handler)
     app.router.add_route("*", "/{path:.*}", proxy_handler)
 
     runner = web.AppRunner(app)
@@ -87,6 +99,7 @@ async def main():
     print(f"Providers: {provider_list}")
     print(f"Token pool: {len(token_pool)} tokens")
     print(f"Usage query: http://0.0.0.0:{cfg.bind_port}/usage")
+    print(f"Status page: http://0.0.0.0:{cfg.bind_port}/status")
     print(f"Admin panel: http://0.0.0.0:{cfg.bind_port}/admin")
     print(f"Intercept: {cfg.intercept_port or 'disabled'}")
     print(f"Logging: {'enabled' if cfg.enable_log else 'disabled'}")
