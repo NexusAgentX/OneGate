@@ -25,6 +25,7 @@ class AppConfig:
     timeout_total: int = 1800
     timeout_connect: int = 30
     timeout_sock_read: int = 900
+    banned_ips: list[str] = field(default_factory=list)
     decompress_log: bool = True
 
 
@@ -79,6 +80,8 @@ def load_config(config_dir: str | None = None) -> AppConfig:
     cfg.pool_file = pool_cfg.get("file", "pool.json")
     cfg.usage_db = pool_cfg.get("usage_db", "data/onegate.db")
     cfg.admin_tokens = pool_cfg.get("admin_tokens", [])
+
+    cfg.banned_ips = data.get("banned_ips", [])
 
     providers_cfg = data.get("providers", {})
     for name, pcfg in providers_cfg.items():

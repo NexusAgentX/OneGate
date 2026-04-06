@@ -444,6 +444,7 @@
             <th>Providers</th>
             <th>Admin</th>
             <th>Enabled</th>
+            <th>Rate Limits</th>
             <th>1d</th>
             <th>7d</th>
             <th>30d</th>
@@ -476,6 +477,27 @@
             <input type="checkbox" id="modal-admin">
             <span class="slider"></span>
           </label>
+        </div>
+        <div class="form-group" style="margin-top:8px">
+          <label>Rate Limits (-1 = unlimited, 0 = not allowed)</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-top:6px">
+            <div>
+              <label style="font-size:11px;color:#8b949e;margin-bottom:2px;display:block">RPM</label>
+              <input type="number" id="modal-rpm" value="-1" style="width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:6px 8px;border-radius:6px;font-size:13px">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#8b949e;margin-bottom:2px;display:block">RPH</label>
+              <input type="number" id="modal-rph" value="-1" style="width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:6px 8px;border-radius:6px;font-size:13px">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#8b949e;margin-bottom:2px;display:block">RPD</label>
+              <input type="number" id="modal-rpd" value="-1" style="width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:6px 8px;border-radius:6px;font-size:13px">
+            </div>
+            <div>
+              <label style="font-size:11px;color:#8b949e;margin-bottom:2px;display:block">RPT</label>
+              <input type="number" id="modal-rpt" value="-1" style="width:100%;background:#0d1117;border:1px solid #30363d;color:#c9d1d9;padding:6px 8px;border-radius:6px;font-size:13px">
+            </div>
+          </div>
         </div>
         <div class="modal-actions">
           <button class="btn" onclick="hideModal()">Cancel</button>
@@ -591,6 +613,22 @@
       return provs.map(p => `<span class="tag">${esc(p)}</span>`).join('');
     }
 
+    function renderRateLimits(t) {
+      const rpm = t.rpm ?? -1;
+      const rph = t.rph ?? -1;
+      const rpd = t.rpd ?? -1;
+      const rpt = t.rpt ?? -1;
+      if (rpm === -1 && rph === -1 && rpd === -1 && rpt === -1) {
+        return '<span style="color:#8b949e;font-size:11px">Unlimited</span>';
+      }
+      const parts = [];
+      if (rpm !== -1) parts.push(`<span style="color:#58a6ff" title="RPM">${rpm}</span>`);
+      if (rph !== -1) parts.push(`<span style="color:#58a6ff" title="RPH">${rph}</span>`);
+      if (rpd !== -1) parts.push(`<span style="color:#58a6ff" title="RPD">${rpd}</span>`);
+      if (rpt !== -1) parts.push(`<span style="color:#58a6ff" title="RPT">${rpt}</span>`);
+      return parts.join(' <span style="color:#30363d">|</span> ');
+    }
+
     function renderRow(t, usageMap) {
       const adminBadge = t.is_admin ? '<span class="badge badge-admin">Admin</span>' : '<span class="badge badge-user">User</span>';
       const shortToken = t.token.slice(0, 6);
@@ -606,6 +644,7 @@
         <span class="slider"></span>
       </label>
     </td>
+    <td style="font-size:11px">${renderRateLimits(t)}</td>
     <td style="font-size:12px;color:#c9d1d9">${u['1d'] || 0}</td>
     <td style="font-size:12px;color:#c9d1d9">${u['7d'] || 0}</td>
     <td style="font-size:12px;color:#c9d1d9">${u['30d'] || 0}</td>
@@ -630,7 +669,7 @@
       const usageMap = usageRes.ok ? (usageRes.data.usage || {}) : {};
       const tbody = document.getElementById('token-tbody');
       if (!tokensRes.data.tokens || tokensRes.data.tokens.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty">No tokens</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="11" class="empty">No tokens</td></tr>';
       } else {
         tbody.innerHTML = tokensRes.data.tokens.map(t => renderRow(t, usageMap)).join('');
       }
@@ -663,6 +702,10 @@
       document.getElementById('modal-describe').value = '';
       document.getElementById('modal-admin').checked = false;
       buildProviderCheckboxes('modal-providers', ['*']);
+      document.getElementById('modal-rpm').value = '-1';
+      document.getElementById('modal-rph').value = '-1';
+      document.getElementById('modal-rpd').value = '-1';
+      document.getElementById('modal-rpt').value = '-1';
       document.getElementById('modal-submit').textContent = 'Create';
       document.getElementById('modal-overlay').classList.add('active');
     }
@@ -682,6 +725,10 @@
       document.getElementById('modal-describe').value = t.describe || '';
       document.getElementById('modal-admin').checked = t.is_admin;
       buildProviderCheckboxes('modal-providers', t.providers);
+      document.getElementById('modal-rpm').value = t.rpm ?? -1;
+      document.getElementById('modal-rph').value = t.rph ?? -1;
+      document.getElementById('modal-rpd').value = t.rpd ?? -1;
+      document.getElementById('modal-rpt').value = t.rpt ?? -1;
       document.getElementById('modal-submit').textContent = 'Save';
       document.getElementById('modal-overlay').classList.add('active');
     }
@@ -694,6 +741,10 @@
       const provs = getSelectedProviders('modal-providers');
       const isAdmin = document.getElementById('modal-admin').checked;
       const describe = document.getElementById('modal-describe').value.trim();
+      const rpm = parseInt(document.getElementById('modal-rpm').value) || -1;
+      const rph = parseInt(document.getElementById('modal-rph').value) || -1;
+      const rpd = parseInt(document.getElementById('modal-rpd').value) || -1;
+      const rpt = parseInt(document.getElementById('modal-rpt').value) || -1;
       let result;
       if (!editingToken) {
         const customToken = document.getElementById('modal-token').value.trim();
@@ -702,6 +753,7 @@
           providers: provs,
           is_admin: isAdmin,
           describe: describe,
+          rpm, rph, rpd, rpt,
         });
       } else {
         result = await api('PUT', '/admin/api/tokens', {
@@ -709,6 +761,7 @@
           providers: provs,
           is_admin: isAdmin,
           describe: describe,
+          rpm, rph, rpd, rpt,
         });
       }
       if (!result.ok) {

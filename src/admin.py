@@ -61,9 +61,23 @@ def create_admin_handlers(
         is_admin = body.get("is_admin", False)
         describe = body.get("describe", "")
         custom_token = body.get("token")
+        rpm = body.get("rpm", -1)
+        rph = body.get("rph", -1)
+        rpd = body.get("rpd", -1)
+        rpt = body.get("rpt", -1)
 
         token = custom_token if custom_token else make_token()
-        entry = add_token(db_conn, token, providers, is_admin, describe=describe)
+        entry = add_token(
+            db_conn,
+            token,
+            providers,
+            is_admin,
+            describe=describe,
+            rpm=rpm,
+            rph=rph,
+            rpd=rpd,
+            rpt=rpt,
+        )
         token_pool[entry.token] = entry
         return web.json_response({"token": entry.to_dict()})
 
@@ -85,6 +99,10 @@ def create_admin_handlers(
         is_admin = body.get("is_admin")
         enabled = body.get("enabled")
         describe = body.get("describe")
+        rpm = body.get("rpm")
+        rph = body.get("rph")
+        rpd = body.get("rpd")
+        rpt = body.get("rpt")
 
         if is_admin is False and target == admin_token:
             return web.json_response(
@@ -102,6 +120,10 @@ def create_admin_handlers(
             is_admin=is_admin,
             enabled=enabled,
             describe=describe,
+            rpm=rpm,
+            rph=rph,
+            rpd=rpd,
+            rpt=rpt,
         )
         if not entry:
             return web.json_response({"error": "token not found"}, status=404)

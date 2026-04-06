@@ -10,7 +10,13 @@ import aiohttp
 from aiohttp import web
 
 from src.config import AppConfig, match_provider
-from src.db import get_provider_status, record_status, record_usage
+from src.db import (
+    check_rate_limit,
+    get_provider_status,
+    record_status,
+    record_success,
+    record_usage,
+)
 from src.log import save_log, save_log_headers_only
 from src.models import TokenEntry
 from src.pool import resolve_token
@@ -49,16 +55,16 @@ async def _query_usage(token, token_pool, db_conn, start_str=None, end_str=None)
     end_hour = end_ts - (end_ts % 3600)
 
     cur = db_conn.execute(
-        "SELECT provider, ts, count FROM request_log "
-        "WHERE token = ? AND ts >= ? AND ts <= ? "
-        "ORDER BY provider, ts",
+        "SELECT provider, ts - (ts % 3600) AS hour_ts, SUM(count) AS cnt "
+        "FROM success_log WHERE token = ? AND ts >= ? AND ts <= ? "
+        "GROUP BY provider, hour_ts ORDER BY provider, hour_ts",
         (token, start_hour, end_hour),
     )
     rows = cur.fetchall()
 
     by_provider: dict[str, dict[int, int]] = {}
-    for provider_name, ts, count in rows:
-        by_provider.setdefault(provider_name, {})[ts] = count
+    for provider_name, hour_ts, cnt in rows:
+        by_provider.setdefault(provider_name, {})[hour_ts] = cnt
 
     hourly: dict[str, dict[str, int]] = {}
     t = start_hour
@@ -70,23 +76,24 @@ async def _query_usage(token, token_pool, db_conn, start_str=None, end_str=None)
             hourly[key][prov_name] = by_provider[prov_name].get(t, 0)
         t += 3600
 
-    total = sum(count for _, _, count in rows)
+    total = sum(cnt for _, _, cnt in rows)
 
     summary: dict[str, int] = {}
     for label, hours in [("last_24h", 24), ("last_7d", 168), ("last_30d", 720)]:
         cutoff = int(now.timestamp()) - hours * 3600
         cutoff_hour = cutoff - (cutoff % 3600)
         row = db_conn.execute(
-            "SELECT COALESCE(SUM(count), 0) FROM request_log "
+            "SELECT COALESCE(SUM(count), 0) FROM success_log "
             "WHERE token = ? AND ts >= ?",
             (token, cutoff_hour),
         ).fetchone()
         summary[label] = row[0]
 
     current_hour_rows = db_conn.execute(
-        "SELECT provider, COALESCE(count, 0) FROM request_log "
-        "WHERE token = ? AND ts = ?",
-        (token, current_hour_ts),
+        "SELECT provider, SUM(count) FROM success_log "
+        "WHERE token = ? AND ts >= ? AND ts < ? "
+        "GROUP BY provider",
+        (token, current_hour_ts, current_hour_ts + 3600),
     ).fetchall()
     current_hour = {
         "hour": datetime.fromtimestamp(current_hour_ts, tz=timezone.utc).strftime(
@@ -98,7 +105,7 @@ async def _query_usage(token, token_pool, db_conn, start_str=None, end_str=None)
     return {
         "token": token,
         "providers": entry.providers,
-        "describe": getattr(entry, 'describe', ''),
+        "describe": getattr(entry, "describe", ""),
         "current_hour": current_hour,
         "range": {
             "start": start_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -147,6 +154,14 @@ def create_handlers(
         return web.json_response(data)
 
     async def proxy_handler(request: web.Request) -> web.StreamResponse:
+        client_ip = request.headers.get("X-Forwarded-For", "")
+        if not client_ip:
+            client_ip = request.headers.get("X-Real-IP", "")
+        if not client_ip:
+            client_ip = request.remote or ""
+        if client_ip in cfg.banned_ips:
+            return web.json_response({"error": "forbidden"}, status=403)
+
         provider = match_provider(cfg.providers, request.path)
         if not provider:
             return web.json_response({"error": "no provider matched"}, status=502)
@@ -186,11 +201,42 @@ def create_handlers(
             else:
                 headers["Authorization"] = resolved_auth
 
+        if "x-api-key" in headers:
+            real_token = cfg.real_tokens.get(provider.name, "")
+            if real_token:
+                headers["x-api-key"] = real_token
+
         if forbidden:
             return web.json_response(
                 {"error": f"token not authorized for provider '{provider.name}'"},
                 status=403,
             )
+
+        if proxy_token:
+            token_entry = token_pool.get(proxy_token)
+            if token_entry and (
+                token_entry.rpm != -1
+                or token_entry.rph != -1
+                or token_entry.rpd != -1
+                or token_entry.rpt != -1
+            ):
+                allowed, triggered, quota_info = check_rate_limit(
+                    db_conn,
+                    proxy_token,
+                    token_entry.rpm,
+                    token_entry.rph,
+                    token_entry.rpd,
+                    token_entry.rpt,
+                )
+                if not allowed:
+                    return web.json_response(
+                        {
+                            "error": "rate limit exceeded",
+                            "triggered": triggered,
+                            "quota": quota_info,
+                        },
+                        status=429,
+                    )
 
         body = await request.read() if request.body_exists else None
 
@@ -247,6 +293,8 @@ def create_handlers(
                         )
                 if proxy_token:
                     record_usage(db_conn, proxy_token, provider.name)
+                    if resp.status == 200:
+                        record_success(db_conn, proxy_token, provider.name)
                 record_status(db_conn, provider.name, resp.status)
                 logger.info(
                     "%s %s -> [%s] %s",
@@ -295,21 +343,122 @@ def create_handlers(
 
     async def status_api_handler(request: web.Request) -> web.Response:
         uptime = int(time.time() - start_time)
+        stats = get_provider_status(db_conn)
+
+        grouped: dict[str, dict] = {}
+        for p in cfg.providers:
+            real_token = cfg.real_tokens.get(p.name, "")
+            key = f"{p.upstream}::{real_token}"
+            if key not in grouped:
+                grouped[key] = {
+                    "name": p.name,
+                    "prefixes": [p.prefix],
+                    "upstream": p.upstream,
+                    "original_names": [p.name],
+                }
+            else:
+                grouped[key]["prefixes"].append(p.prefix)
+                grouped[key]["original_names"].append(p.name)
+
         providers = [
             {
-                "name": p.name,
-                "prefix": p.prefix,
-                "upstream": p.upstream,
+                "name": v["name"],
+                "prefix": ", ".join(v["prefixes"]),
+                "upstream": v["upstream"],
             }
-            for p in cfg.providers
+            for v in grouped.values()
         ]
-        stats = get_provider_status(db_conn)
+
+        merged_hourly: dict[str, list] = {}
+        for pname, hourly_data in stats.get("hourly", {}).items():
+            for p in cfg.providers:
+                real_token = cfg.real_tokens.get(p.name, "")
+                key = f"{p.upstream}::{real_token}"
+                if p.name == pname and key in grouped:
+                    group_name = grouped[key]["name"]
+                    if group_name not in merged_hourly:
+                        merged_hourly[group_name] = hourly_data
+                    else:
+                        for i, h in enumerate(hourly_data):
+                            if i < len(merged_hourly[group_name]):
+                                merged_hourly[group_name][i]["total"] += h["total"]
+                                merged_hourly[group_name][i]["success"] += h["success"]
+                                if merged_hourly[group_name][i]["total"] > 0:
+                                    merged_hourly[group_name][i]["success_rate"] = (
+                                        round(
+                                            merged_hourly[group_name][i]["success"]
+                                            / merged_hourly[group_name][i]["total"]
+                                            * 100,
+                                            2,
+                                        )
+                                    )
+                                for sc, cnt in h.get("error_distribution", {}).items():
+                                    if (
+                                        sc
+                                        not in merged_hourly[group_name][i][
+                                            "error_distribution"
+                                        ]
+                                    ):
+                                        merged_hourly[group_name][i][
+                                            "error_distribution"
+                                        ][sc] = 0
+                                    merged_hourly[group_name][i]["error_distribution"][
+                                        sc
+                                    ] += cnt
+                    break
+
+        merged_summary: dict[str, dict] = {}
+        for pname, period_data in stats.items():
+            if pname == "hourly":
+                continue
+            for p in cfg.providers:
+                real_token = cfg.real_tokens.get(p.name, "")
+                key = f"{p.upstream}::{real_token}"
+                if p.name == pname and key in grouped:
+                    group_name = grouped[key]["name"]
+                    if group_name not in merged_summary:
+                        merged_summary[group_name] = period_data
+                    else:
+                        for period, data in period_data.items():
+                            if period in merged_summary[group_name]:
+                                merged_summary[group_name][period]["total"] += data[
+                                    "total"
+                                ]
+                                merged_summary[group_name][period]["success"] += data[
+                                    "success"
+                                ]
+                                if merged_summary[group_name][period]["total"] > 0:
+                                    merged_summary[group_name][period][
+                                        "success_rate"
+                                    ] = round(
+                                        merged_summary[group_name][period]["success"]
+                                        / merged_summary[group_name][period]["total"]
+                                        * 100,
+                                        2,
+                                    )
+                                for sc, cnt in data.get(
+                                    "error_distribution", {}
+                                ).items():
+                                    if (
+                                        sc
+                                        not in merged_summary[group_name][period][
+                                            "error_distribution"
+                                        ]
+                                    ):
+                                        merged_summary[group_name][period][
+                                            "error_distribution"
+                                        ][sc] = 0
+                                    merged_summary[group_name][period][
+                                        "error_distribution"
+                                    ][sc] += cnt
+                    break
+
         return web.json_response(
             {
                 "uptime": uptime,
                 "providers": providers,
-                "stats": stats.get("hourly", {}),
-                "summary": {k: v for k, v in stats.items() if k != "hourly"},
+                "stats": merged_hourly,
+                "summary": merged_summary,
             }
         )
 

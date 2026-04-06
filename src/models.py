@@ -33,6 +33,11 @@ class TokenEntry:
         enabled: bool = True,
         created_at: int | None = None,
         describe: str = "",
+        rpm: int = -1,
+        rph: int = -1,
+        rpd: int = -1,
+        rpt: int = -1,
+        success_count: int = 0,
     ):
         self.token = token
         self.providers: list[str] = providers if providers is not None else ["*"]
@@ -40,6 +45,11 @@ class TokenEntry:
         self.enabled = enabled
         self.created_at = created_at or int(time.time())
         self.describe = describe
+        self.rpm = rpm
+        self.rph = rph
+        self.rpd = rpd
+        self.rpt = rpt
+        self.success_count = success_count
 
     def has_permission(self, provider: Provider) -> bool:
         if not self.enabled:
@@ -56,6 +66,11 @@ class TokenEntry:
             1 if self.enabled else 0,
             self.created_at,
             self.describe,
+            self.rpm,
+            self.rph,
+            self.rpd,
+            self.rpt,
+            self.success_count,
         )
 
     @staticmethod
@@ -67,6 +82,11 @@ class TokenEntry:
             enabled=bool(row[3]),
             created_at=row[4],
             describe=row[5] if len(row) > 5 else "",
+            rpm=row[6] if len(row) > 6 else 0,
+            rph=row[7] if len(row) > 7 else 0,
+            rpd=row[8] if len(row) > 8 else 0,
+            rpt=row[9] if len(row) > 9 else 0,
+            success_count=row[10] if len(row) > 10 else 0,
         )
 
     def to_dict(self) -> dict:
@@ -77,4 +97,9 @@ class TokenEntry:
             "enabled": self.enabled,
             "created_at": self.created_at,
             "describe": self.describe,
+            "rpm": self.rpm,
+            "rph": self.rph,
+            "rpd": self.rpd,
+            "rpt": self.rpt,
+            "success_count": self.success_count,
         }

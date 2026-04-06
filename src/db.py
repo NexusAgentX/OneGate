@@ -64,6 +64,37 @@ def _migrate_old_schema(conn: sqlite3.Connection):
         conn.commit()
 
 
+def _migrate_rate_limit_columns(conn: sqlite3.Connection):
+    cols = _get_columns(conn, "token_pool")
+    new_cols = ["rpm", "rph", "rpd", "rpt", "success_count"]
+    for col in new_cols:
+        if col not in cols:
+            print(f"[DB] Migrating: adding '{col}' column to token_pool")
+            conn.execute(
+                f"ALTER TABLE token_pool ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"
+            )
+    conn.commit()
+
+    existing_tables = {
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "success_log" not in existing_tables:
+        print("[DB] Creating success_log table")
+        conn.execute(
+            "CREATE TABLE success_log ("
+            "  token    TEXT NOT NULL,"
+            "  provider TEXT NOT NULL DEFAULT 'default',"
+            "  ts       INTEGER NOT NULL,"
+            "  count    INTEGER NOT NULL DEFAULT 1,"
+            "  PRIMARY KEY (token, provider, ts)"
+            ")"
+        )
+        conn.commit()
+
+
 def _migrate_pool_json(
     conn: sqlite3.Connection, pool_file: str, admin_tokens: list[str]
 ):
@@ -131,6 +162,7 @@ def init_db(
         ")"
     )
     _migrate_old_schema(conn)
+    _migrate_rate_limit_columns(conn)
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_pool ("
@@ -213,6 +245,9 @@ def init_db(
     conn.execute(
         "DELETE FROM status_log WHERE ts < ?", (int(time.time()) - 35 * 86400,)
     )
+    conn.execute(
+        "DELETE FROM success_log WHERE ts < ?", (int(time.time()) - 35 * 86400,)
+    )
     conn.commit()
 
     total = conn.execute("SELECT COUNT(*) FROM token_pool").fetchone()[0]
@@ -231,9 +266,110 @@ def record_usage(conn: sqlite3.Connection, token: str, provider_name: str):
     conn.commit()
 
 
+def record_success(conn: sqlite3.Connection, token: str, provider_name: str):
+    now = int(time.time())
+    min_ts = now - (now % 60)
+    conn.execute(
+        "INSERT INTO success_log (token, provider, ts, count) VALUES (?, ?, ?, 1) "
+        "ON CONFLICT(token, provider, ts) DO UPDATE SET count = count + 1",
+        (token, provider_name, min_ts),
+    )
+    conn.execute(
+        "UPDATE token_pool SET success_count = success_count + 1 WHERE token = ?",
+        (token,),
+    )
+    conn.commit()
+
+
+def check_rate_limit(
+    conn: sqlite3.Connection,
+    token: str,
+    rpm: int,
+    rph: int,
+    rpd: int,
+    rpt: int,
+) -> tuple[bool, str | None, dict]:
+    now = int(time.time())
+    current_min_ts = now - (now % 60)
+    current_hour_ts = now - (now % 3600)
+    current_day_ts = now - (now % 86400)
+
+    used_rpm = conn.execute(
+        "SELECT COALESCE(count, 0) FROM success_log WHERE token = ? AND ts = ?",
+        (token, current_min_ts),
+    ).fetchone()
+    used_rpm = used_rpm[0] if used_rpm else 0
+
+    used_rph = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM success_log WHERE token = ? AND ts >= ?",
+        (token, current_hour_ts),
+    ).fetchone()
+    used_rph = used_rph[0] if used_rph else 0
+
+    used_rpd = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM success_log WHERE token = ? AND ts >= ?",
+        (token, current_day_ts),
+    ).fetchone()
+    used_rpd = used_rpd[0] if used_rpd else 0
+
+    used_rpt = conn.execute(
+        "SELECT COALESCE(success_count, 0) FROM token_pool WHERE token = ?",
+        (token,),
+    ).fetchone()
+    used_rpt = used_rpt[0] if used_rpt else 0
+
+    used_rph = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM success_log WHERE token = ? AND ts >= ?",
+        (token, current_hour_ts),
+    ).fetchone()[0]
+
+    used_rpd = conn.execute(
+        "SELECT COALESCE(SUM(count), 0) FROM success_log WHERE token = ? AND ts >= ?",
+        (token, current_day_ts),
+    ).fetchone()[0]
+
+    used_rpt = conn.execute(
+        "SELECT COALESCE(success_count, 0) FROM token_pool WHERE token = ?",
+        (token,),
+    ).fetchone()[0]
+
+    reset_in_rpm = 60 - (now % 60)
+    reset_in_rph = 3600 - (now % 3600)
+    reset_in_rpd = 86400 - (now % 86400)
+
+    quota: dict = {}
+
+    def add_quota(key: str, limit: int, used: int, reset_in: int | None, desc: str):
+        if limit == -1:
+            return
+        quota[key] = {
+            "description": desc,
+            "limit": limit,
+            "used": used,
+            "reset_in": reset_in,
+        }
+
+    add_quota("rpm", rpm, used_rpm, reset_in_rpm, "requests per minute")
+    add_quota("rph", rph, used_rph, reset_in_rph, "requests per hour")
+    add_quota("rpd", rpd, used_rpd, reset_in_rpd, "requests per day")
+    add_quota("rpt", rpt, used_rpt, None, "requests per total")
+
+    if rpm == 0 or (rpm > 0 and used_rpm >= rpm):
+        return False, "rpm", quota
+    if rph == 0 or (rph > 0 and used_rph >= rph):
+        return False, "rph", quota
+    if rpd == 0 or (rpd > 0 and used_rpd >= rpd):
+        return False, "rpd", quota
+    if rpt == 0 or (rpt > 0 and used_rpt >= rpt):
+        return False, "rpt", quota
+
+    return True, None, quota
+
+
 def get_all_tokens(conn: sqlite3.Connection) -> list[TokenEntry]:
     cur = conn.execute(
-        "SELECT token, providers, is_admin, enabled, created_at, describe FROM token_pool "
+        "SELECT token, providers, is_admin, enabled, created_at, describe, "
+        "rpm, rph, rpd, rpt, success_count FROM token_pool "
         "ORDER BY created_at DESC"
     )
     return [TokenEntry.from_db_row(row) for row in cur.fetchall()]
@@ -241,7 +377,8 @@ def get_all_tokens(conn: sqlite3.Connection) -> list[TokenEntry]:
 
 def get_token(conn: sqlite3.Connection, token: str) -> TokenEntry | None:
     cur = conn.execute(
-        "SELECT token, providers, is_admin, enabled, created_at, describe FROM token_pool WHERE token = ?",
+        "SELECT token, providers, is_admin, enabled, created_at, describe, "
+        "rpm, rph, rpd, rpt, success_count FROM token_pool WHERE token = ?",
         (token,),
     )
     row = cur.fetchone()
@@ -263,14 +400,38 @@ def add_token(
     providers: list[str],
     is_admin: bool = False,
     describe: str = "",
+    rpm: int = -1,
+    rph: int = -1,
+    rpd: int = -1,
+    rpt: int = -1,
 ) -> TokenEntry:
     entry = TokenEntry(
-        token=token, providers=providers, is_admin=is_admin, describe=describe
+        token=token,
+        providers=providers,
+        is_admin=is_admin,
+        describe=describe,
+        rpm=rpm,
+        rph=rph,
+        rpd=rpd,
+        rpt=rpt,
     )
     conn.execute(
-        "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at, describe) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        entry.to_db_row(),
+        "INSERT OR IGNORE INTO token_pool (token, providers, is_admin, enabled, created_at, describe, "
+        "rpm, rph, rpd, rpt, success_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            token,
+            json.dumps(providers),
+            1 if is_admin else 0,
+            1,
+            entry.created_at,
+            describe,
+            rpm,
+            rph,
+            rpd,
+            rpt,
+            0,
+        ),
     )
     conn.commit()
     return entry
@@ -283,6 +444,10 @@ def update_token(
     is_admin: bool | None = None,
     enabled: bool | None = None,
     describe: str | None = None,
+    rpm: int | None = None,
+    rph: int | None = None,
+    rpd: int | None = None,
+    rpt: int | None = None,
 ) -> TokenEntry | None:
     entry = get_token(conn, token)
     if not entry:
@@ -295,13 +460,26 @@ def update_token(
         entry.enabled = enabled
     if describe is not None:
         entry.describe = describe
+    if rpm is not None:
+        entry.rpm = rpm
+    if rph is not None:
+        entry.rph = rph
+    if rpd is not None:
+        entry.rpd = rpd
+    if rpt is not None:
+        entry.rpt = rpt
     conn.execute(
-        "UPDATE token_pool SET providers=?, is_admin=?, enabled=?, describe=? WHERE token=?",
+        "UPDATE token_pool SET providers=?, is_admin=?, enabled=?, describe=?, "
+        "rpm=?, rph=?, rpd=?, rpt=? WHERE token=?",
         (
             json.dumps(entry.providers),
             1 if entry.is_admin else 0,
             1 if entry.enabled else 0,
             entry.describe,
+            entry.rpm,
+            entry.rph,
+            entry.rpd,
+            entry.rpt,
             token,
         ),
     )

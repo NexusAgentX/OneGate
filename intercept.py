@@ -8,12 +8,12 @@ from datetime import datetime, timezone
 import aiohttp
 from aiohttp import web
 
-TARGET_HOST = "open.bigmodel.cn"
-TARGET_ORIGIN = f"https://{TARGET_HOST}"
-BIND_PORT = 5679
-LOG_DIR = "intercept_logs"
+from src.config import load_config, match_provider
 
 logger = logging.getLogger(__name__)
+
+BIND_PORT = 5679
+LOG_DIR = "intercept_logs"
 
 
 def _ensure_log_dir():
@@ -23,6 +23,7 @@ def _ensure_log_dir():
 def _save_log(
     request_method,
     request_path,
+    target_url,
     req_headers,
     req_body,
     resp_status,
@@ -35,7 +36,7 @@ def _save_log(
         "timestamp": now,
         "upstream_request": {
             "method": request_method,
-            "url": f"https://{TARGET_HOST}{request_path}",
+            "url": target_url,
             "headers": dict(req_headers),
             "body": req_body.decode("utf-8", errors="replace") if req_body else None,
         },
@@ -51,14 +52,22 @@ def _save_log(
 
 
 async def intercept_handler(
-    request: web.Request, session: aiohttp.ClientSession
+    request: web.Request, session: aiohttp.ClientSession, cfg
 ) -> web.StreamResponse:
-    target_url = TARGET_ORIGIN + request.path
+    provider = match_provider(cfg.providers, request.path)
+    if not provider:
+        return web.json_response({"error": "no matching provider"}, status=400)
+
+    target_url = provider.origin + request.path
     if request.query_string:
         target_url += "?" + request.query_string
 
     headers = dict(request.headers)
-    headers["Host"] = TARGET_HOST
+    headers["Host"] = provider.host
+    if "x-api-key" in headers:
+        api_token = cfg.real_tokens.get(provider.name, "")
+        if api_token:
+            headers["x-api-key"] = api_token
 
     body = await request.read() if request.body_exists else None
 
@@ -91,6 +100,7 @@ async def intercept_handler(
             _save_log(
                 request.method,
                 request.path,
+                target_url,
                 request.headers,
                 body,
                 resp.status,
@@ -125,6 +135,8 @@ async def intercept_handler(
 
 
 async def main():
+    cfg = load_config()
+
     timeout = aiohttp.ClientTimeout(total=1800, sock_connect=30, sock_read=900)
     connector = aiohttp.TCPConnector(ssl=ssl.create_default_context())
     session = aiohttp.ClientSession(
@@ -140,19 +152,19 @@ async def main():
     app = web.Application(handler_args={"keepalive_timeout": 75})
     app.on_cleanup.append(on_cleanup)
 
-    def make_handler(s: aiohttp.ClientSession):
+    def make_handler(s: aiohttp.ClientSession, c):
         async def handler(request: web.Request) -> web.StreamResponse:
-            return await intercept_handler(request, s)
+            return await intercept_handler(request, s, c)
 
         return handler
 
-    app.router.add_route("*", "/{path:.*}", make_handler(session))
+    app.router.add_route("*", "/{path:.*}", make_handler(session, cfg))
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", BIND_PORT)
     await site.start()
-    print(f"Intercept proxy running on http://0.0.0.0:{BIND_PORT} -> {TARGET_ORIGIN}")
+    print(f"Intercept proxy running on http://0.0.0.0:{BIND_PORT}")
     print(f"Logs saved to {LOG_DIR}/")
     await asyncio.Event().wait()
 

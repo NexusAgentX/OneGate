@@ -33,3 +33,5 @@ uv.lock
 *.service
 
 config.toml
+
+.env
