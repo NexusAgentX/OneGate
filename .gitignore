@@ -1,37 +1,35 @@
+# Python
 __pycache__/
 *.py[oc]
 build/
 dist/
 wheels/
 *.egg-info
-
-.venv/
-
-logs/
-intercept_logs/
-
+.pytest_cache/
 .ruff_cache/
 
-.opencode/
+# Virtual environments
+.venv/
 
+# Config & secrets
 config.toml
+.env
 
-usage.db
+# Runtime data
 *.db
-
 *.bak
-
+logs/
+intercept_logs/
 data/
-
 pool.json
 
-.pytest_cache/
-
+# Lock & version
 uv.lock
-
 .python-version
+
+# Service
 *.service
 
-config.toml
-
-.env
+# Tool directories
+.opencode/
+.claude/

@@ -82,6 +82,7 @@ async def intercept_handler(
             resp_headers = dict(resp.headers)
             resp_headers.pop("Transfer-Encoding", None)
             resp_headers.pop("Content-Length", None)
+            resp_headers.pop("Content-Encoding", None)
 
             resp_chunks = []
             response = web.StreamResponse(
@@ -143,7 +144,7 @@ async def main():
         connector=connector,
         timeout=timeout,
         skip_auto_headers={"User-Agent"},
-        auto_decompress=False,
+        auto_decompress=True,
     )
 
     async def on_cleanup(app: web.Application):

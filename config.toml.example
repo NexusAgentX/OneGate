@@ -3,6 +3,8 @@ intercept_port = 0
 enable_log = false
 # log_format = "full"   # "full" = per-request .json with body (default), "headers" = daily .jsonl with headers only
 
+# banned_uas = ["Bun*"]  # Wildcard patterns (fnmatch) to block by User-Agent
+
 [timeout]
 total = 1800
 connect = 30

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import aiohttp
@@ -23,6 +26,81 @@ from src.pool import resolve_token
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 logger = logging.getLogger(__name__)
+
+_THROUGHPUT_CHUNK_INTERVAL = 0.3
+
+
+def _parse_request_model(body: bytes | None) -> str:
+    if not body:
+        return ""
+    try:
+        obj = json.loads(body)
+        return obj.get("model", "")
+    except Exception:
+        return ""
+
+
+def _estimate_input_tokens(body: bytes | None) -> int:
+    if not body:
+        return 0
+    try:
+        obj = json.loads(body)
+        messages = obj.get("messages", [])
+        total_chars = sum(
+            len(m.get("content", ""))
+            for m in messages
+            if isinstance(m.get("content"), str)
+        )
+        if not total_chars:
+            prompt = obj.get("prompt", "")
+            if isinstance(prompt, str):
+                total_chars = len(prompt)
+            elif isinstance(prompt, list):
+                total_chars = sum(len(p) for p in prompt if isinstance(p, str))
+        return max(1, total_chars // 3)
+    except Exception:
+        return 0
+
+
+def _extract_usage_from_sse(line_buffer: str) -> tuple[int, int]:
+    input_tokens = 0
+    output_tokens = 0
+    for line in line_buffer.split("\n"):
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            continue
+        try:
+            obj = json.loads(payload)
+        except Exception:
+            continue
+        usage = obj.get("usage")
+        if not usage:
+            choices = obj.get("choices", [])
+            for ch in choices:
+                delta = ch.get("delta", {})
+                if isinstance(delta.get("content"), str):
+                    output_tokens += 1
+        else:
+            input_tokens = usage.get("prompt_tokens", input_tokens)
+            ct = usage.get("completion_tokens", 0)
+            if ct:
+                output_tokens = ct
+    return input_tokens, output_tokens
+
+
+def _extract_usage_from_json(body: bytes | None) -> tuple[int, int]:
+    if not body:
+        return 0, 0
+    try:
+        obj = json.loads(body)
+        usage = obj.get("usage", {})
+        if usage:
+            return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+        return 0, 0
+    except Exception:
+        return 0, 0
 
 
 def _parse_iso(s: str) -> datetime:
@@ -124,6 +202,7 @@ def create_handlers(
     public_ip: str | None,
     session: aiohttp.ClientSession,
     start_time: float,
+    monitor=None,
 ):
     async def serve_usage_page(request: web.Request) -> web.Response:
         html_path = os.path.join(STATIC_DIR, "usage.html")
@@ -161,6 +240,11 @@ def create_handlers(
             client_ip = request.remote or ""
         if client_ip in cfg.banned_ips:
             return web.json_response({"error": "forbidden"}, status=403)
+
+        ua = request.headers.get("User-Agent", "")
+        for pattern in cfg.banned_uas:
+            if fnmatch.fnmatch(ua, pattern):
+                return web.json_response({"error": "forbidden"}, status=403)
 
         provider = match_provider(cfg.providers, request.path)
         if not provider:
@@ -240,6 +324,40 @@ def create_handlers(
 
         body = await request.read() if request.body_exists else None
 
+        tp_active = monitor is not None and monitor.is_active(proxy_token)
+        tp_id = ""
+        tp_model = ""
+        tp_input_est = 0
+        tp_is_stream = False
+        tp_line_buf = ""
+        tp_data_line_count = 0
+        tp_exact_input = 0
+        tp_exact_output = 0
+        tp_has_exact = False
+        tp_start_time = 0.0
+        tp_last_broadcast = 0.0
+        tp_chunks: list[bytes] = []
+
+        if tp_active:
+            tp_id = uuid.uuid4().hex[:12]
+            tp_model = _parse_request_model(body)
+            tp_input_est = _estimate_input_tokens(body)
+            tp_start_time = time.monotonic()
+            tp_last_broadcast = tp_start_time
+            monitor.broadcast(
+                proxy_token,
+                "start",
+                {
+                    "id": tp_id,
+                    "time": time.time() * 1000,
+                    "model": tp_model,
+                    "provider": provider.name,
+                    "input_tokens": tp_input_est,
+                    "request_url": request.path,
+                    "target_url": target_url,
+                },
+            )
+
         try:
             async with session.request(
                 method=request.method,
@@ -251,6 +369,11 @@ def create_handlers(
                 resp_headers = dict(resp.headers)
                 resp_headers.pop("Transfer-Encoding", None)
                 resp_headers.pop("Content-Length", None)
+                resp_headers.pop("Content-Encoding", None)
+
+                if tp_active:
+                    ct = resp_headers.get("Content-Type", "")
+                    tp_is_stream = "text/event-stream" in ct
 
                 response = web.StreamResponse(
                     status=resp.status,
@@ -262,9 +385,102 @@ def create_handlers(
                 async for chunk in resp.content.iter_any():
                     if cfg.enable_log and cfg.log_format == "full":
                         resp_chunks.append(chunk)
+
+                    if tp_active:
+                        tp_chunks.append(chunk)
+                        if tp_is_stream:
+                            tp_line_buf += chunk.decode("utf-8", errors="replace")
+                            while "\n" in tp_line_buf:
+                                line, tp_line_buf = tp_line_buf.split("\n", 1)
+                                if not line.startswith("data:"):
+                                    continue
+                                payload = line[5:].strip()
+                                if payload == "[DONE]":
+                                    continue
+                                try:
+                                    obj = json.loads(payload)
+                                except Exception:
+                                    continue
+                                usage = obj.get("usage")
+                                if usage:
+                                    if usage.get("prompt_tokens"):
+                                        tp_exact_input = usage["prompt_tokens"]
+                                    if usage.get("completion_tokens"):
+                                        tp_exact_output = usage["completion_tokens"]
+                                        tp_has_exact = True
+                                else:
+                                    choices = obj.get("choices", [])
+                                    for ch in choices:
+                                        delta = ch.get("delta", {})
+                                        if (
+                                            isinstance(delta.get("content"), str)
+                                            and delta["content"]
+                                        ):
+                                            tp_data_line_count += 1
+                            now_mono = time.monotonic()
+                            if (
+                                now_mono - tp_last_broadcast
+                                >= _THROUGHPUT_CHUNK_INTERVAL
+                            ):
+                                elapsed_ms = (now_mono - tp_start_time) * 1000
+                                est_out = (
+                                    tp_exact_output
+                                    if tp_has_exact
+                                    else tp_data_line_count
+                                )
+                                tps = (
+                                    est_out / (elapsed_ms / 1000)
+                                    if elapsed_ms > 0
+                                    else 0
+                                )
+                                monitor.broadcast(
+                                    proxy_token,
+                                    "chunk",
+                                    {
+                                        "id": tp_id,
+                                        "output_tokens": est_out,
+                                        "duration_ms": round(elapsed_ms),
+                                        "tps": round(tps, 1),
+                                    },
+                                )
+                                tp_last_broadcast = now_mono
+
                     await response.write(chunk)
 
                 await response.write_eof()
+
+                if tp_active:
+                    elapsed_ms = (time.monotonic() - tp_start_time) * 1000
+                    if tp_is_stream:
+                        if tp_line_buf.strip():
+                            pi, po = _extract_usage_from_sse(tp_line_buf)
+                            if pi:
+                                tp_exact_input = pi
+                            if po and not tp_has_exact:
+                                tp_exact_output = po
+                                tp_has_exact = True
+                        final_input = tp_exact_input or tp_input_est
+                        final_output = (
+                            tp_exact_output if tp_has_exact else tp_data_line_count
+                        )
+                    else:
+                        full_resp = b"".join(tp_chunks)
+                        pi, po = _extract_usage_from_json(full_resp)
+                        final_input = pi or tp_input_est
+                        final_output = po
+                    tps = final_output / (elapsed_ms / 1000) if elapsed_ms > 0 else 0
+                    monitor.broadcast(
+                        proxy_token,
+                        "end",
+                        {
+                            "id": tp_id,
+                            "input_tokens": final_input,
+                            "output_tokens": final_output,
+                            "duration_ms": round(elapsed_ms),
+                            "tps": round(tps, 1),
+                            "status": resp.status,
+                        },
+                    )
 
                 resp_body = b"".join(resp_chunks) if resp_chunks else None
                 if cfg.enable_log:

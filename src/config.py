@@ -26,6 +26,7 @@ class AppConfig:
     timeout_connect: int = 30
     timeout_sock_read: int = 900
     banned_ips: list[str] = field(default_factory=list)
+    banned_uas: list[str] = field(default_factory=list)
     decompress_log: bool = True
 
 
@@ -82,6 +83,7 @@ def load_config(config_dir: str | None = None) -> AppConfig:
     cfg.admin_tokens = pool_cfg.get("admin_tokens", [])
 
     cfg.banned_ips = data.get("banned_ips", [])
+    cfg.banned_uas = data.get("banned_uas", [])
 
     providers_cfg = data.get("providers", {})
     for name, pcfg in providers_cfg.items():

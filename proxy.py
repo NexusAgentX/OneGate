@@ -14,6 +14,7 @@ from src.db import init_db
 from src.handlers import create_handlers
 from src.network import fetch_public_ip
 from src.pool import load_pool_from_db
+from src.throughput import ThroughputMonitor, create_throughput_handlers
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -51,11 +52,16 @@ async def main():
         connector=connector,
         timeout=timeout,
         skip_auto_headers={"User-Agent"},
-        auto_decompress=False,
+        auto_decompress=True,
     )
 
     async def on_cleanup(app: web.Application):
         await session.close()
+
+    monitor = ThroughputMonitor(token_pool)
+    serve_tp_page, create_tp_session, tp_sse = create_throughput_handlers(
+        monitor, token_pool
+    )
 
     (
         serve_usage_page,
@@ -63,7 +69,9 @@ async def main():
         proxy_handler,
         serve_status_page,
         status_api_handler,
-    ) = create_handlers(cfg, token_pool, db_conn, public_ip, session, time.time())
+    ) = create_handlers(
+        cfg, token_pool, db_conn, public_ip, session, time.time(), monitor
+    )
 
     (
         serve_admin_page,
@@ -87,6 +95,9 @@ async def main():
     app.router.add_get("/admin/api/tokens/usage", api_tokens_usage)
     app.router.add_get("/status", serve_status_page)
     app.router.add_get("/status/api", status_api_handler)
+    app.router.add_get("/throughput", serve_tp_page)
+    app.router.add_post("/throughput/api/session", create_tp_session)
+    app.router.add_get("/throughput/events", tp_sse)
     app.router.add_route("*", "/{path:.*}", proxy_handler)
 
     runner = web.AppRunner(app)
@@ -101,6 +112,7 @@ async def main():
     print(f"Usage query: http://0.0.0.0:{cfg.bind_port}/usage")
     print(f"Status page: http://0.0.0.0:{cfg.bind_port}/status")
     print(f"Admin panel: http://0.0.0.0:{cfg.bind_port}/admin")
+    print(f"Throughput: http://0.0.0.0:{cfg.bind_port}/throughput")
     print(f"Intercept: {cfg.intercept_port or 'disabled'}")
     print(f"Logging: {'enabled' if cfg.enable_log else 'disabled'}")
     print(
