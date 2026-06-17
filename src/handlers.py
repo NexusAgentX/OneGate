@@ -19,6 +19,7 @@ from src.db import (
     record_status,
     record_success,
     record_usage,
+    resolve_model,
 )
 from src.log import save_log, save_log_headers_only
 from src.models import TokenEntry
@@ -28,6 +29,21 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 logger = logging.getLogger(__name__)
 
 _THROUGHPUT_CHUNK_INTERVAL = 0.3
+_THROUGHPUT_BODY_LIMIT = 100 * 1024
+_SENSITIVE_HEADERS = frozenset(
+    {
+        "authorization",
+        "x-api-key",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+        "www-authenticate",
+    }
+)
+
+
+def _filter_headers(headers: dict) -> dict:
+    return {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_HEADERS}
 
 
 def _parse_request_model(body: bytes | None) -> str:
@@ -83,10 +99,18 @@ def _extract_usage_from_sse(line_buffer: str) -> tuple[int, int]:
                 if isinstance(delta.get("content"), str):
                     output_tokens += 1
         else:
-            input_tokens = usage.get("prompt_tokens", input_tokens)
-            ct = usage.get("completion_tokens", 0)
-            if ct:
-                output_tokens = ct
+            if "prompt_tokens" in usage:
+                input_tokens = usage.get("prompt_tokens", input_tokens)
+                ct = usage.get("completion_tokens", 0)
+                if ct:
+                    output_tokens = ct
+            elif "input_tokens" in usage:
+                it = usage.get("input_tokens", 0)
+                if it:
+                    input_tokens = it
+                ot = usage.get("output_tokens", 0)
+                if ot:
+                    output_tokens = ot
     return input_tokens, output_tokens
 
 
@@ -97,7 +121,10 @@ def _extract_usage_from_json(body: bytes | None) -> tuple[int, int]:
         obj = json.loads(body)
         usage = obj.get("usage", {})
         if usage:
-            return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+            if "prompt_tokens" in usage:
+                return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+            if "input_tokens" in usage:
+                return usage.get("input_tokens", 0), usage.get("output_tokens", 0)
         return 0, 0
     except Exception:
         return 0, 0
@@ -246,6 +273,7 @@ def create_handlers(
             if fnmatch.fnmatch(ua, pattern):
                 return web.json_response({"error": "forbidden"}, status=403)
 
+        is_v1_route = request.path.startswith("/v1/")
         provider = match_provider(cfg.providers, request.path)
         if not provider:
             return web.json_response({"error": "no provider matched"}, status=502)
@@ -256,13 +284,7 @@ def create_handlers(
             if path.startswith(prefix):
                 path = path[len(prefix) :] or "/"
 
-        if cfg.intercept_port:
-            target_url = f"http://127.0.0.1:{cfg.intercept_port}" + path
-        else:
-            target_url = provider.origin + path
-        if request.query_string:
-            target_url += "?" + request.query_string
-
+        proxy_token = None
         forced_headers = {
             "Host": provider.host,
             "X-Forwarded-For": public_ip,
@@ -274,7 +296,6 @@ def create_handlers(
             if key in headers:
                 headers[key] = value
 
-        proxy_token = None
         forbidden = False
         if "Authorization" in headers:
             proxy_token, resolved_auth = resolve_token(
@@ -289,6 +310,17 @@ def create_handlers(
             real_token = cfg.real_tokens.get(provider.name, "")
             if real_token:
                 headers["x-api-key"] = real_token
+            elif proxy_token is None:
+                proxy_token, resolved_key = resolve_token(
+                    "Bearer " + headers["x-api-key"],
+                    provider,
+                    token_pool,
+                    cfg.real_tokens,
+                )
+                if proxy_token is not None and resolved_key == "":
+                    forbidden = True
+                elif proxy_token is not None:
+                    headers["x-api-key"] = resolved_key[7:]
 
         if forbidden:
             return web.json_response(
@@ -324,6 +356,70 @@ def create_handlers(
 
         body = await request.read() if request.body_exists else None
 
+        v1_override_provider = None
+        if is_v1_route and proxy_token and body:
+            model = _parse_request_model(body)
+            if not model:
+                return web.json_response(
+                    {"error": "model not found in request body"}, status=400
+                )
+            mapped_model, mapped_provider_name = resolve_model(
+                db_conn, proxy_token, model
+            )
+            if mapped_model == model and not mapped_provider_name:
+                return web.json_response(
+                    {
+                        "error": f"model '{model}' not found in mapping rules",
+                        "model": model,
+                    },
+                    status=404,
+                )
+            for p in cfg.providers:
+                if p.name == mapped_provider_name:
+                    v1_override_provider = p
+                    break
+            if v1_override_provider:
+                try:
+                    obj = json.loads(body)
+                    obj["model"] = mapped_model
+                    body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+                    headers["Content-Length"] = str(len(body))
+                except Exception:
+                    pass
+                real_token = cfg.real_tokens.get(v1_override_provider.name, "")
+                if real_token:
+                    headers["Authorization"] = f"Bearer {real_token}"
+                headers["Host"] = v1_override_provider.host
+        elif proxy_token and body:
+            model = _parse_request_model(body)
+            if model:
+                mapped, _ = resolve_model(db_conn, proxy_token, model)
+                if mapped != model:
+                    try:
+                        obj = json.loads(body)
+                        obj["model"] = mapped
+                        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+                        headers["Content-Length"] = str(len(body))
+                    except Exception:
+                        pass
+
+        effective_provider = v1_override_provider or provider
+        if is_v1_route and v1_override_provider:
+            v1_path = path
+            if v1_path.startswith("/v1"):
+                v1_path = v1_path[3:] or "/"
+            if cfg.intercept_port:
+                target_url = f"http://127.0.0.1:{cfg.intercept_port}" + v1_path
+            else:
+                target_url = effective_provider.origin + v1_path
+        else:
+            if cfg.intercept_port:
+                target_url = f"http://127.0.0.1:{cfg.intercept_port}" + path
+            else:
+                target_url = effective_provider.origin + path
+        if request.query_string:
+            target_url += "?" + request.query_string
+
         tp_active = monitor is not None and monitor.is_active(proxy_token)
         tp_id = ""
         tp_model = ""
@@ -336,6 +432,7 @@ def create_handlers(
         tp_has_exact = False
         tp_start_time = 0.0
         tp_last_broadcast = 0.0
+        tp_first_token_time = 0.0
         tp_chunks: list[bytes] = []
 
         if tp_active:
@@ -344,19 +441,29 @@ def create_handlers(
             tp_input_est = _estimate_input_tokens(body)
             tp_start_time = time.monotonic()
             tp_last_broadcast = tp_start_time
-            monitor.broadcast(
-                proxy_token,
-                "start",
-                {
-                    "id": tp_id,
-                    "time": time.time() * 1000,
-                    "model": tp_model,
-                    "provider": provider.name,
-                    "input_tokens": tp_input_est,
-                    "request_url": request.path,
-                    "target_url": target_url,
-                },
-            )
+            tp_req_body = ""
+            tp_req_body_truncated = False
+            if body:
+                decoded = body.decode("utf-8", errors="replace")
+                if len(decoded) > _THROUGHPUT_BODY_LIMIT:
+                    tp_req_body = decoded[:_THROUGHPUT_BODY_LIMIT]
+                    tp_req_body_truncated = True
+                else:
+                    tp_req_body = decoded
+            start_data = {
+                "id": tp_id,
+                "time": time.time() * 1000,
+                "model": tp_model,
+                "provider": effective_provider.name,
+                "input_tokens": tp_input_est,
+                "request_url": request.path,
+                "target_url": target_url,
+                "request_headers": _filter_headers(headers),
+                "request_body": tp_req_body,
+            }
+            if tp_req_body_truncated:
+                start_data["request_body_truncated"] = True
+            monitor.broadcast(proxy_token, "start", start_data)
 
         try:
             async with session.request(
@@ -403,11 +510,24 @@ def create_handlers(
                                     continue
                                 usage = obj.get("usage")
                                 if usage:
-                                    if usage.get("prompt_tokens"):
-                                        tp_exact_input = usage["prompt_tokens"]
-                                    if usage.get("completion_tokens"):
-                                        tp_exact_output = usage["completion_tokens"]
+                                    pt = usage.get("prompt_tokens")
+                                    it = usage.get("input_tokens")
+                                    ct = usage.get("completion_tokens")
+                                    ot = usage.get("output_tokens")
+                                    if pt:
+                                        tp_exact_input = pt
+                                    if it:
+                                        tp_exact_input = it
+                                    if ct:
+                                        tp_exact_output = ct
                                         tp_has_exact = True
+                                        if tp_first_token_time == 0.0:
+                                            tp_first_token_time = time.monotonic()
+                                    if ot:
+                                        tp_exact_output = ot
+                                        tp_has_exact = True
+                                        if tp_first_token_time == 0.0:
+                                            tp_first_token_time = time.monotonic()
                                 else:
                                     choices = obj.get("choices", [])
                                     for ch in choices:
@@ -417,6 +537,18 @@ def create_handlers(
                                             and delta["content"]
                                         ):
                                             tp_data_line_count += 1
+                                            if tp_first_token_time == 0.0:
+                                                tp_first_token_time = time.monotonic()
+                                    msg_type = obj.get("type", "")
+                                    if msg_type == "content_block_delta":
+                                        delta = obj.get("delta", {})
+                                        if (
+                                            isinstance(delta.get("text"), str)
+                                            and delta["text"]
+                                        ):
+                                            tp_data_line_count += 1
+                                            if tp_first_token_time == 0.0:
+                                                tp_first_token_time = time.monotonic()
                             now_mono = time.monotonic()
                             if (
                                 now_mono - tp_last_broadcast
@@ -433,16 +565,17 @@ def create_handlers(
                                     if elapsed_ms > 0
                                     else 0
                                 )
-                                monitor.broadcast(
-                                    proxy_token,
-                                    "chunk",
-                                    {
-                                        "id": tp_id,
-                                        "output_tokens": est_out,
-                                        "duration_ms": round(elapsed_ms),
-                                        "tps": round(tps, 1),
-                                    },
-                                )
+                                chunk_data = {
+                                    "id": tp_id,
+                                    "output_tokens": est_out,
+                                    "duration_ms": round(elapsed_ms),
+                                    "tps": round(tps, 1),
+                                }
+                                if tp_first_token_time > 0:
+                                    chunk_data["ttft_ms"] = round(
+                                        (tp_first_token_time - tp_start_time) * 1000
+                                    )
+                                monitor.broadcast(proxy_token, "chunk", chunk_data)
                                 tp_last_broadcast = now_mono
 
                     await response.write(chunk)
@@ -459,28 +592,48 @@ def create_handlers(
                             if po and not tp_has_exact:
                                 tp_exact_output = po
                                 tp_has_exact = True
-                        final_input = tp_exact_input or tp_input_est
+                        final_input = max(tp_exact_input, tp_input_est)
+                        input_estimated = (
+                            final_input == tp_input_est or final_input == 0
+                        )
                         final_output = (
                             tp_exact_output if tp_has_exact else tp_data_line_count
                         )
                     else:
                         full_resp = b"".join(tp_chunks)
                         pi, po = _extract_usage_from_json(full_resp)
-                        final_input = pi or tp_input_est
+                        final_input = max(pi, tp_input_est)
+                        input_estimated = (
+                            final_input == tp_input_est or final_input == 0
+                        )
                         final_output = po
                     tps = final_output / (elapsed_ms / 1000) if elapsed_ms > 0 else 0
-                    monitor.broadcast(
-                        proxy_token,
-                        "end",
-                        {
-                            "id": tp_id,
-                            "input_tokens": final_input,
-                            "output_tokens": final_output,
-                            "duration_ms": round(elapsed_ms),
-                            "tps": round(tps, 1),
-                            "status": resp.status,
-                        },
-                    )
+                    ttft_ms = round(elapsed_ms)
+                    if tp_is_stream and tp_first_token_time > 0:
+                        ttft_ms = round((tp_first_token_time - tp_start_time) * 1000)
+                    tp_resp_body = ""
+                    tp_resp_body_truncated = False
+                    decoded_resp = b"".join(tp_chunks).decode("utf-8", errors="replace")
+                    if len(decoded_resp) > _THROUGHPUT_BODY_LIMIT:
+                        tp_resp_body = decoded_resp[:_THROUGHPUT_BODY_LIMIT]
+                        tp_resp_body_truncated = True
+                    else:
+                        tp_resp_body = decoded_resp
+                    end_data = {
+                        "id": tp_id,
+                        "input_tokens": final_input,
+                        "input_estimated": input_estimated,
+                        "output_tokens": final_output,
+                        "duration_ms": round(elapsed_ms),
+                        "ttft_ms": ttft_ms,
+                        "tps": round(tps, 1),
+                        "status": resp.status,
+                        "response_headers": dict(resp_headers),
+                        "response_body": tp_resp_body,
+                    }
+                    if tp_resp_body_truncated:
+                        end_data["response_body_truncated"] = True
+                    monitor.broadcast(proxy_token, "end", end_data)
 
                 resp_body = b"".join(resp_chunks) if resp_chunks else None
                 if cfg.enable_log:
@@ -492,7 +645,7 @@ def create_handlers(
                             resp.status,
                             resp_headers,
                             headers,
-                            provider.name,
+                            effective_provider.name,
                         )
                     else:
                         save_log(
@@ -508,28 +661,42 @@ def create_handlers(
                             decompress=cfg.decompress_log,
                         )
                 if proxy_token:
-                    record_usage(db_conn, proxy_token, provider.name)
+                    record_usage(db_conn, proxy_token, effective_provider.name)
                     if resp.status == 200:
-                        record_success(db_conn, proxy_token, provider.name)
-                record_status(db_conn, provider.name, resp.status)
+                        record_success(db_conn, proxy_token, effective_provider.name)
+                record_status(db_conn, effective_provider.name, resp.status)
                 logger.info(
                     "%s %s -> [%s] %s",
                     request.method,
                     request.path,
-                    provider.name,
+                    effective_provider.name,
                     resp.status,
                 )
 
                 return response
 
         except asyncio.TimeoutError:
-            record_status(db_conn, provider.name, 504)
+            record_status(db_conn, effective_provider.name, 504)
             logger.error(
                 "Timeout proxying %s %s -> [%s] %s",
                 request.method,
                 request.path,
-                provider.name,
+                effective_provider.name,
                 target_url,
+            )
+            return web.json_response(
+                {"error": "upstream request timed out"},
+                status=504,
+            )
+        except aiohttp.ClientError as e:
+            record_status(db_conn, effective_provider.name, 502)
+            logger.error(
+                "Client error proxying %s %s -> [%s] %s: %s",
+                request.method,
+                request.path,
+                effective_provider.name,
+                target_url,
+                e,
             )
             return web.json_response(
                 {"error": "upstream request timed out"},

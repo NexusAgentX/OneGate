@@ -8,13 +8,14 @@ import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 
-from src.admin import create_admin_handlers
+from src.admin import create_admin_handlers, create_mapping_handlers
 from src.config import load_config
 from src.db import init_db
 from src.handlers import create_handlers
 from src.network import fetch_public_ip
 from src.pool import load_pool_from_db
 from src.throughput import ThroughputMonitor, create_throughput_handlers
+from src.v1_handler import create_v1_handlers
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
@@ -82,7 +83,21 @@ async def main():
         api_tokens_usage,
     ) = create_admin_handlers(cfg, db_conn, token_pool)
 
-    app = web.Application(handler_args={"keepalive_timeout": 75})
+    (
+        serve_mapping_page,
+        api_list_mappings,
+        api_set_mapping,
+        api_delete_mapping,
+    ) = create_mapping_handlers(cfg, db_conn, token_pool)
+
+    v1_chat_completions, v1_responses = create_v1_handlers(
+        cfg, token_pool, db_conn
+    )
+
+    app = web.Application(
+        client_max_size=100 * 1024 * 1024,
+        handler_args={"keepalive_timeout": 75},
+    )
     app.on_cleanup.append(on_cleanup)
     app.router.add_static("/static", STATIC_DIR)
     app.router.add_get("/usage", serve_usage_page)
@@ -98,6 +113,17 @@ async def main():
     app.router.add_get("/throughput", serve_tp_page)
     app.router.add_post("/throughput/api/session", create_tp_session)
     app.router.add_get("/throughput/events", tp_sse)
+    app.router.add_get("/mapping", serve_mapping_page)
+    app.router.add_get("/mapping/api", api_list_mappings)
+    app.router.add_post("/mapping/api", api_set_mapping)
+    app.router.add_delete("/mapping/api", api_delete_mapping)
+
+    async def serve_index(_request: web.Request) -> web.FileResponse:
+        return web.FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+    app.router.add_get("/", serve_index)
+    app.router.add_post("/v1/chat/completions", v1_chat_completions)
+    app.router.add_post("/v1/responses", v1_responses)
     app.router.add_route("*", "/{path:.*}", proxy_handler)
 
     runner = web.AppRunner(app)
@@ -112,6 +138,7 @@ async def main():
     print(f"Usage query: http://0.0.0.0:{cfg.bind_port}/usage")
     print(f"Status page: http://0.0.0.0:{cfg.bind_port}/status")
     print(f"Admin panel: http://0.0.0.0:{cfg.bind_port}/admin")
+    print(f"Model mapping: http://0.0.0.0:{cfg.bind_port}/mapping")
     print(f"Throughput: http://0.0.0.0:{cfg.bind_port}/throughput")
     print(f"Intercept: {cfg.intercept_port or 'disabled'}")
     print(f"Logging: {'enabled' if cfg.enable_log else 'disabled'}")

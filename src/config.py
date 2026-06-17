@@ -93,6 +93,7 @@ def load_config(config_dir: str | None = None) -> AppConfig:
             upstream=pcfg.get("upstream", ""),
             strip_prefix=pcfg.get("strip_prefix", False),
             env_token=pcfg.get("env_token", f"TOKEN_{name.upper()}"),
+            v1_base=pcfg.get("v1_base", ""),
         )
         cfg.providers.append(p)
     cfg.providers.sort(key=lambda x: len(x.prefix), reverse=True)

@@ -51,7 +51,7 @@ def resolve_token(
     if real_token:
         return proxy_token, f"Bearer {real_token}"
 
-    return None, auth_value
+    return proxy_token, auth_value
 
 
 def extract_token(auth_value: str) -> str | None:

@@ -33,3 +33,6 @@ uv.lock
 # Tool directories
 .opencode/
 .claude/
+
+# Development documentation
+docs/

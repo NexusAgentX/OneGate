@@ -13,12 +13,14 @@ class Provider:
         upstream: str,
         strip_prefix: bool,
         env_token: str = "",
+        v1_base: str = "",
     ):
         self.name = name
         self.prefix = prefix
         self.upstream = upstream.rstrip("/")
         self.strip_prefix = strip_prefix
         self.env_token = env_token or f"TOKEN_{name.upper()}"
+        self.v1_base = v1_base
         parsed = urlparse(self.upstream)
         self.host: str = parsed.hostname or ""
         self.origin: str = f"{parsed.scheme}://{parsed.netloc}"

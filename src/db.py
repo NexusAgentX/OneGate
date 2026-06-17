@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import fnmatch
+import re
 import json
 import os
 import shutil
@@ -162,7 +164,6 @@ def init_db(
         ")"
     )
     _migrate_old_schema(conn)
-    _migrate_rate_limit_columns(conn)
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_pool ("
@@ -175,6 +176,8 @@ def init_db(
         ")"
     )
 
+    _migrate_rate_limit_columns(conn)
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS status_log ("
         "  provider    TEXT NOT NULL,"
@@ -184,6 +187,24 @@ def init_db(
         "  PRIMARY KEY (provider, status_code, ts)"
         ")"
     )
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS model_map ("
+        "  token    TEXT NOT NULL,"
+        "  pattern  TEXT NOT NULL,"
+        "  target   TEXT NOT NULL,"
+        "  provider TEXT NOT NULL DEFAULT '',"
+        "  PRIMARY KEY (token, pattern)"
+        ")"
+    )
+
+    model_map_cols = _get_columns(conn, "model_map")
+    if model_map_cols and "provider" not in model_map_cols:
+        print("[DB] Migrating: adding 'provider' column to model_map")
+        conn.execute(
+            "ALTER TABLE model_map ADD COLUMN provider TEXT NOT NULL DEFAULT ''"
+        )
+        conn.commit()
 
     conn.execute("UPDATE token_pool SET enabled = 1 WHERE enabled = 0")
     conn.commit()
@@ -597,3 +618,60 @@ def get_provider_status(conn: sqlite3.Connection, hours: int = 168) -> dict:
                 "error_distribution": error_dist,
             }
     return result
+
+
+def get_model_maps(conn: sqlite3.Connection, token: str) -> list[dict]:
+    cur = conn.execute(
+        "SELECT pattern, target, provider FROM model_map WHERE token = ? ORDER BY pattern",
+        (token,),
+    )
+    return [
+        {"pattern": row[0], "target": row[1], "provider": row[2]}
+        for row in cur.fetchall()
+    ]
+
+
+def set_model_map(
+    conn: sqlite3.Connection,
+    token: str,
+    pattern: str,
+    target: str,
+    provider: str = "",
+):
+    conn.execute(
+        "INSERT INTO model_map (token, pattern, target, provider) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(token, pattern) DO UPDATE SET target = excluded.target, provider = excluded.provider",
+        (token, pattern, target, provider),
+    )
+    conn.commit()
+
+
+def delete_model_map(conn: sqlite3.Connection, token: str, pattern: str) -> bool:
+    cur = conn.execute(
+        "DELETE FROM model_map WHERE token = ? AND pattern = ?",
+        (token, pattern),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def resolve_model(conn: sqlite3.Connection, token: str, model: str) -> tuple[str, str]:
+    if not model:
+        return model, ""
+    rows = conn.execute(
+        "SELECT pattern, target, provider FROM model_map WHERE token = ?",
+        (token,),
+    ).fetchall()
+    for pattern, target, provider in rows:
+        try:
+            m = re.fullmatch(pattern, model)
+        except re.error:
+            m = None
+        if m:
+            result = target
+            for i in range(len(m.groups()), 0, -1):
+                result = result.replace(f"${i}", m.group(i) if m.group(i) else "")
+            return result, provider
+        if fnmatch.fnmatch(model, pattern):
+            return target, provider
+    return model, ""

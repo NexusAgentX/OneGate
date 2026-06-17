@@ -150,7 +150,10 @@ async def main():
     async def on_cleanup(app: web.Application):
         await session.close()
 
-    app = web.Application(handler_args={"keepalive_timeout": 75})
+    app = web.Application(
+        client_max_size=100 * 1024 * 1024,
+        handler_args={"keepalive_timeout": 75},
+    )
     app.on_cleanup.append(on_cleanup)
 
     def make_handler(s: aiohttp.ClientSession, c):
