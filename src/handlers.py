@@ -41,9 +41,33 @@ _SENSITIVE_HEADERS = frozenset(
     }
 )
 
+_HOP_BY_HOP = frozenset(
+    {
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+
+_STRIP_REQUEST_HEADERS = _HOP_BY_HOP | {"content-length"}
+
 
 def _filter_headers(headers: dict) -> dict:
     return {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_HEADERS}
+
+
+def _build_forward_headers(request: web.Request, strip_lower: frozenset[str]) -> dict:
+    headers: dict[str, str] = {}
+    for key, value in request.headers.items():
+        if key.lower() in strip_lower:
+            continue
+        headers[key] = value
+    return headers
 
 
 def _parse_request_model(body: bytes | None) -> str:
@@ -285,41 +309,39 @@ def create_handlers(
                 path = path[len(prefix) :] or "/"
 
         proxy_token = None
-        forced_headers = {
-            "Host": provider.host,
-            "X-Forwarded-For": public_ip,
-            "X-Real-IP": public_ip,
-        }
 
-        headers = dict(request.headers)
-        for key, value in forced_headers.items():
-            if key in headers:
-                headers[key] = value
+        headers = _build_forward_headers(request, _STRIP_REQUEST_HEADERS)
+        headers["Host"] = provider.host
+        existing_xff = request.headers.get("X-Forwarded-For")
+        headers["X-Forwarded-For"] = (
+            f"{existing_xff}, {public_ip}" if existing_xff else public_ip
+        )
+        headers["X-Real-IP"] = public_ip
 
         forbidden = False
-        if "Authorization" in headers:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header:
             proxy_token, resolved_auth = resolve_token(
-                headers["Authorization"], provider, token_pool, cfg.real_tokens
+                auth_header, provider, token_pool, cfg.real_tokens
             )
             if proxy_token is not None and resolved_auth == "":
                 forbidden = True
             else:
                 headers["Authorization"] = resolved_auth
 
-        if "x-api-key" in headers:
-            real_token = cfg.real_tokens.get(provider.name, "")
-            if real_token:
-                headers["x-api-key"] = real_token
-            elif proxy_token is None:
-                proxy_token, resolved_key = resolve_token(
-                    "Bearer " + headers["x-api-key"],
-                    provider,
-                    token_pool,
-                    cfg.real_tokens,
-                )
-                if proxy_token is not None and resolved_key == "":
+        api_key = request.headers.get("x-api-key", "")
+        if api_key:
+            key_token, resolved_key = resolve_token(
+                "Bearer " + api_key,
+                provider,
+                token_pool,
+                cfg.real_tokens,
+            )
+            if key_token is not None:
+                proxy_token = key_token
+                if resolved_key == "":
                     forbidden = True
-                elif proxy_token is not None:
+                else:
                     headers["x-api-key"] = resolved_key[7:]
 
         if forbidden:
@@ -699,21 +721,7 @@ def create_handlers(
                 e,
             )
             return web.json_response(
-                {"error": "upstream request timed out"},
-                status=504,
-            )
-        except aiohttp.ClientError as e:
-            record_status(db_conn, provider.name, 502)
-            logger.error(
-                "Client error proxying %s %s -> [%s] %s: %s",
-                request.method,
-                request.path,
-                provider.name,
-                target_url,
-                e,
-            )
-            return web.json_response(
-                {"error": f"upstream connection error: {e}"},
+                {"error": "upstream connection error"},
                 status=502,
             )
 

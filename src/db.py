@@ -206,9 +206,6 @@ def init_db(
         )
         conn.commit()
 
-    conn.execute("UPDATE token_pool SET enabled = 1 WHERE enabled = 0")
-    conn.commit()
-
     generated_admins: list[str] = []
 
     has_any_admin = conn.execute(
@@ -320,24 +317,6 @@ def check_rate_limit(
         (token, current_min_ts),
     ).fetchone()
     used_rpm = used_rpm[0] if used_rpm else 0
-
-    used_rph = conn.execute(
-        "SELECT COALESCE(SUM(count), 0) FROM success_log WHERE token = ? AND ts >= ?",
-        (token, current_hour_ts),
-    ).fetchone()
-    used_rph = used_rph[0] if used_rph else 0
-
-    used_rpd = conn.execute(
-        "SELECT COALESCE(SUM(count), 0) FROM success_log WHERE token = ? AND ts >= ?",
-        (token, current_day_ts),
-    ).fetchone()
-    used_rpd = used_rpd[0] if used_rpd else 0
-
-    used_rpt = conn.execute(
-        "SELECT COALESCE(success_count, 0) FROM token_pool WHERE token = ?",
-        (token,),
-    ).fetchone()
-    used_rpt = used_rpt[0] if used_rpt else 0
 
     used_rph = conn.execute(
         "SELECT COALESCE(SUM(count), 0) FROM success_log WHERE token = ? AND ts >= ?",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import random
 import re
+import secrets
 import string
 
 import sqlite3
@@ -9,11 +9,12 @@ import sqlite3
 from src.models import Provider, TokenEntry
 
 TOKEN_PATTERN = re.compile(r"^Bearer ([0-9a-f]{32})\.([A-Za-z0-9]{16})$")
+_ALPHABET = string.ascii_letters + string.digits
 
 
 def make_token() -> str:
-    part1 = "".join(random.choices("0123456789abcdef", k=32))
-    part2 = "".join(random.choices(string.ascii_letters + string.digits, k=16))
+    part1 = secrets.token_hex(16)
+    part2 = "".join(secrets.choice(_ALPHABET) for _ in range(16))
     return f"{part1}.{part2}"
 
 

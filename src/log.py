@@ -22,6 +22,21 @@ except ImportError:
 
 LOG_DIR = "logs"
 
+_REDACT_HEADERS = frozenset(
+    {
+        "authorization",
+        "x-api-key",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+        "www-authenticate",
+    }
+)
+
+
+def redact_headers(headers) -> dict:
+    return {k: v for k, v in headers.items() if k.lower() not in _REDACT_HEADERS}
+
 
 def _decompress_body(encoding: str, body: bytes) -> bytes:
     if not encoding:
@@ -79,19 +94,19 @@ def save_log(
         "request": {
             "method": request_method,
             "path": request_path,
-            "headers": dict(req_headers),
+            "headers": redact_headers(req_headers),
             "body": _try_parse_json_body(req_headers, req_body, decompress=decompress),
         },
         "forward": {
             "url": target_url,
-            "headers": dict(forward_headers),
+            "headers": redact_headers(forward_headers),
             "body": _try_parse_json_body(
                 forward_headers, req_body, decompress=decompress
             ),
         },
         "response": {
             "status": resp_status,
-            "headers": dict(resp_headers),
+            "headers": redact_headers(resp_headers),
             "body": _try_parse_json_body(
                 resp_headers, resp_body, decompress=decompress
             ),
@@ -121,9 +136,9 @@ def save_log_headers_only(
         "path": request_path,
         "provider": provider_name,
         "status": resp_status,
-        "req_headers": dict(req_headers),
-        "forward_headers": dict(forward_headers),
-        "resp_headers": dict(resp_headers),
+        "req_headers": redact_headers(req_headers),
+        "forward_headers": redact_headers(forward_headers),
+        "resp_headers": redact_headers(resp_headers),
     }
     log_file = os.path.join(LOG_DIR, f"{date_str}.jsonl")
     with open(log_file, "a", encoding="utf-8") as f:

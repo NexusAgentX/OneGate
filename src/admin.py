@@ -225,6 +225,20 @@ def create_mapping_handlers(cfg: AppConfig, db_conn, token_pool: dict[str, Token
             return web.json_response(
                 {"error": "pattern and target are required"}, status=400
             )
+        if provider:
+            if provider not in providers:
+                return web.json_response(
+                    {"error": f"unknown provider '{provider}'"}, status=400
+                )
+            entry = token_pool.get(token)
+            allowed = entry is not None and (
+                "*" in entry.providers or provider in entry.providers
+            )
+            if not allowed:
+                return web.json_response(
+                    {"error": f"token not authorized for provider '{provider}'"},
+                    status=403,
+                )
         set_model_map(db_conn, token, pattern, target, provider)
         return web.json_response({"ok": True})
 

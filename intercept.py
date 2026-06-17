@@ -9,6 +9,7 @@ import aiohttp
 from aiohttp import web
 
 from src.config import load_config, match_provider
+from src.log import redact_headers
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,12 @@ def _save_log(
         "upstream_request": {
             "method": request_method,
             "url": target_url,
-            "headers": dict(req_headers),
+            "headers": redact_headers(req_headers),
             "body": req_body.decode("utf-8", errors="replace") if req_body else None,
         },
         "upstream_response": {
             "status": resp_status,
-            "headers": dict(resp_headers),
+            "headers": redact_headers(resp_headers),
             "body": resp_body.decode("utf-8", errors="replace") if resp_body else None,
         },
     }

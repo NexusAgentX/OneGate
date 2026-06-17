@@ -123,6 +123,15 @@ def create_v1_handlers(
         if not target_provider:
             target_provider = cfg.providers[-1]
 
+        entry = token_pool.get(proxy_token)
+        if entry is None or not entry.has_permission(target_provider):
+            return web.json_response(
+                {
+                    "error": f"token not authorized for provider '{target_provider.name}'"
+                },
+                status=403,
+            )
+
         real_token = cfg.real_tokens.get(target_provider.name, "")
         litellm_model = _get_litellm_model(target_provider, mapped_model)
         base_url = _get_litellm_base_url(target_provider)
@@ -277,6 +286,15 @@ def create_v1_handlers(
         if not target_provider:
             target_provider = cfg.providers[-1]
 
+        entry = token_pool.get(proxy_token)
+        if entry is None or not entry.has_permission(target_provider):
+            return web.json_response(
+                {
+                    "error": f"token not authorized for provider '{target_provider.name}'"
+                },
+                status=403,
+            )
+
         real_token = cfg.real_tokens.get(target_provider.name, "")
         litellm_model = _get_litellm_model(target_provider, mapped_model)
         base_url = _get_litellm_base_url(target_provider)
@@ -389,40 +407,6 @@ def create_v1_handlers(
                     text=resp_body,
                     content_type="application/json",
                 )
-                resp = web.StreamResponse(
-                    status=200,
-                    headers={
-                        "Content-Type": "text/event-stream",
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-                await resp.prepare(request)
-                async for event in result:
-                    if hasattr(event, "model_dump"):
-                        await resp.write(
-                            f"data: {event.model_dump_json()}\n\n".encode("utf-8")
-                        )
-                    elif isinstance(event, dict):
-                        await resp.write(
-                            f"data: {json.dumps(event)}\n\n".encode("utf-8")
-                        )
-                    else:
-                        await resp.write(
-                            f"data: {json.dumps(str(event))}\n\n".encode("utf-8")
-                        )
-                await resp.write(b"data: [DONE]\n\n")
-                await resp.write_eof()
-                elapsed = time.monotonic() - start_time
-                logger.info(
-                    "V1 RESPONSES STREAM %s -> [%s] %s %.2fs",
-                    original_model,
-                    target_provider.name,
-                    200,
-                    elapsed,
-                )
-                return resp
         except litellm.exceptions.AuthenticationError as e:
             logger.error(
                 "V1 RESPONSES upstream auth failed: %s %s -> %s",
